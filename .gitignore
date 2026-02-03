@@ -1,0 +1,11 @@
+/target
+Cargo.lock
+/*/Cargo.lock
+*.o
+/Falcon-impl-round3/libfalcon.a
+/Falcon-impl-round3/speed
+/Falcon-impl-round3/test_falcon
+/.vscode
+/*/.vscode
+.DS_Store
+**/.DS_Store

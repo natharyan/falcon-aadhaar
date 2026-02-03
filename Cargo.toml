@@ -1,0 +1,10 @@
+
+[workspace]
+members = [
+    "core",
+    "dependencies/falcon-rust",
+    "dependencies/falcon-r1cs", 
+    "dependencies/nova-aadhaar-qr",
+]
+
+resolver = "2"

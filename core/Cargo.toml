@@ -1,0 +1,15 @@
+[package]
+name = "falcon-aadhaar"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+falcon-rust = { path = "../dependencies/falcon-rust", default-features = false }
+falcon-r1cs = { path = "../dependencies/falcon-r1cs" }
+nova-aadhaar-qr = { path = "../dependencies/nova-aadhaar-qr" }
+
+[features]
+default = [ "falcon-1024", "parallel" ]
+falcon-512 = [ "falcon-rust/falcon-512" ]
+falcon-1024 = [ "falcon-rust/falcon-1024" ]
+parallel = [ ]
