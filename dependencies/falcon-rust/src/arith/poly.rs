@@ -134,7 +134,7 @@ impl Polynomial {
         // NOTE extracts additional bytes to account for rejections
         // LINK falcon-rust/Falcon-impl-round3/shake.c
         let buffer = rng.extract(N * 3);
-        println!("extracted {} bytes from shake256", buffer.len());
+        // println!("extracted {} bytes from shake256", buffer.len());
         let mut ctr = 0;
         // extract the data from rng and build the output
         let mut res = [0u16; N];

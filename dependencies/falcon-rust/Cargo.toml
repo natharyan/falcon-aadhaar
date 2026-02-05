@@ -26,7 +26,7 @@ name = "bench"
 harness = false
 
 [features]
-default = [ "falcon-1024" ]
+default = [ "falcon-512" ]
 falcon-512 = [ ]
 falcon-1024 = [ ]
 

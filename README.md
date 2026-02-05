@@ -9,8 +9,10 @@ We design and implement Falcon signature verification as an incremental computat
 ## Project Structure
 
 - [`core/`](core/) - Main Falcon Aadhaar implementation
-- [`dependencies/falcon-rust/`](dependencies/falcon-rust/) - Rust wrapper for Falcon signatures
-- [`dependencies/falcon-r1cs/`](dependencies/falcon-r1cs/) - R1CS circuits for Falcon signature verification using Arkworks framework
+- [`dependencies/falcon-rust/`](dependencies/falcon-rust/) - Rust wrapper for Falcon signatures,
+  sourced from <a href="https://github.com/zhenfeizhang/falcon.rs/tree/master/falcon-rust" target="_blank">zhenfeizhang/falcon.rs/falcon-rust</a>.
+- [`dependencies/falcon-r1cs/`](dependencies/falcon-r1cs/) - R1CS circuits for Falcon signature verification using Arkworks framework,
+  sourced from <a href="https://github.com/zhenfeizhang/falcon.rs/tree/master/falcon-r1cs" target="_blank">zhenfeizhang/falcon.rs/falcon-r1cs</a>.
 - [`dependencies/nova-aadhaar-qr/`](dependencies/nova-aadhaar-qr/) - Implementation of
   <a href="https://www.ee.iitb.ac.in/~sarva/zk/aadhaar-age-proof.pdf" target="_blank">Nova Aadhaar</a>,
-  sourced from <a href="https://github.com/avras/nova-aadhaar-qr" target="_blank">avras/nova-aadhaar-qr</a>
+  sourced from <a href="https://github.com/avras/nova-aadhaar-qr" target="_blank">avras/nova-aadhaar-qr</a>.

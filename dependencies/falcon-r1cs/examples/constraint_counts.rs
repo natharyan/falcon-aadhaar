@@ -20,7 +20,7 @@ fn main() {
 fn count_verify_with_schoolbook_constraints() {
     let keypair = KeyPair::keygen();
     let message = "testing message".as_bytes();
-    let sig = keypair
+    let sig: Signature = keypair
         .secret_key
         .sign_with_seed("test seed".as_ref(), message.as_ref());
 

@@ -7,7 +7,7 @@ pub mod arith;
 mod binder;
 mod param;
 mod shake;
-mod structs;
+pub mod structs;
 
 pub use arith::*;
 use binder::*;
