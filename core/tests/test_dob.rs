@@ -5,7 +5,6 @@ use bellpepper_core::{
     boolean::{AllocatedBit, Boolean},
     test_cs::TestConstraintSystem,
 };
-#[cfg(feature = "falcon-512")]
 use falcon_rust::{KeyPair, Signature};
 use image;
 use num_bigint::BigInt;
@@ -170,10 +169,11 @@ fn test_age_calculation_with_qr_png() {
     println!("\n=== Testing Falcon Signature ===");
 
     let keypair = KeyPair::keygen();
+    let seed = "test seed".as_ref();
     let sig_message = &signed_data;
     let sig: Signature = keypair
         .secret_key
-        .sign_with_seed("test seed".as_ref(), sig_message);
+        .sign_with_seed(seed, sig_message);
 
     assert!(keypair.public_key.verify_rust(sig_message.as_ref(), &sig));
     println!("Falcon signature verification PASSED!");

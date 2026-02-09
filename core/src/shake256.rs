@@ -2,16 +2,20 @@
 // modified to include shake256, variable input length, and squeezing phase of the sponge construction of keccak for variable output length. 
 // Bellpepper implementation of https://github.com/natharyan/arkworks-keccak/blob/main/src/constraints.rs for shake256
 
+use bellpepper::gadgets::multipack::bytes_to_bits;
 use bellpepper_core::ConstraintSystem;
 use bellpepper_core::SynthesisError;
 use bellpepper_core::boolean::Boolean;
+use proptest::bits;
 
 use crate::bellpepper_uint64::UInt64;
-use crate::utils::library_step_sponge;
+use crate::utils::{library_step_sponge, bytes_to_bits_le, bits_to_bytes_le,vec_bool_to_arr_u64, arr_u64_to_vec_bool};
 use ff::PrimeField;
 
 pub(crate) const SHAKE256_BLOCK_LENGTH_BITS: usize = 1088;
 pub(crate) const SHAKE256_BLOCK_LENGTH_BYTES: usize = 136;
+pub(crate) const SHAKE256_DIGEST_LENGTH_BYTES: usize = 200;
+pub(crate) const SHAKE256_DIGEST_LENGTH_BITS: usize = 1600;
 
 // use bellpepper_uint64 as uint64;
 // use uint64::UInt64;
@@ -181,7 +185,7 @@ where
     CS: ConstraintSystem<E>,
 {
     let mut padded: Vec<Boolean> = input.to_vec();
-    // append 1111
+    // append 1111 for domain separation for shake256 (https://keccak.team/files/Keccak-submission-3.pdf, section 2.1.2)
     padded.push(Boolean::Constant(true));
     padded.push(Boolean::Constant(true));
     padded.push(Boolean::Constant(true));
@@ -218,28 +222,31 @@ where
     let m_blocks: Vec<Vec<Boolean>> = split_to_blocks(&padded_message)?;
     for m_i in m_blocks.iter() {
         // expected output for a single step of absorption phase
-        // let expected_state = libary_step_sponge(
-        //     state.clone(),
-        //     Some((*m_i.clone()).to_vec()),
-        //     r,
-        //     Boolean::Constant(false),
-        // )?;
+        let state_bools = state.iter().map(|b| b.get_value().unwrap()).collect();
+        let m_i_bools = m_i.iter().map(|b| b.get_value().unwrap()).collect();
+        let expected_state = library_step_sponge(
+            state_bools,
+            Some(m_i_bools),
+            r,
+            false,
+        );
         for i in 0..r{
             state[i] = Boolean::xor(cs.namespace(|| format!("absorb block bit {}",i)), &state[i], &m_i[i])?;
         }
         let cs = &mut cs.namespace(|| format!("keccack round in absorption phase"));
         state = keccak_f_1600(cs, &state)?;
-        // for (o, i) in state.iter().zip(expected_state.iter()) {
-        //     assert_eq!(
-        //         o.value().unwrap(),
-        //         i.value().unwrap(),
-        //         "keccak step mismatch!!"
-        //     );
-        // }
+        for (o, &i) in state.iter().zip(expected_state.iter()) {
+            assert_eq!(
+                o.get_value().unwrap(),
+                i,
+                "keccak step mismatch!!"
+            );
+        }
     }
     Ok(state)
 }
 
+// TODO: make state a pair of vec<boolean> and pointer which tracks how many bits have been extracted and use it to reset the state using the keccak permutation
 pub fn shake256_extract<E,CS>(mut cs: CS, mut state: Vec<Boolean>, r: usize, d: usize) -> Result<Vec<Boolean>, SynthesisError>
 where
     E: PrimeField,
@@ -267,6 +274,26 @@ where
     Ok(z)
 }
 
+pub(crate) fn shake256_msg_blocks(input: Vec<u8>) -> Vec<[u8; SHAKE256_BLOCK_LENGTH_BYTES]> {
+    let mut padded: Vec<bool> = bytes_to_bits_le(&input);
+    // append 1111 for domain separation for shake256 (https://keccak.team/files/Keccak-submission-3.pdf, section 2.1.2)
+    padded.push(true);
+    padded.push(true);
+    padded.push(true);
+    padded.push(true);
+    // append a single 1 bit
+    padded.push(true);
+    // append K '0' bits, where K is the minimum number >= 0 such that L + 1 + K  is a multiple of r = 1088
+    while (padded.len() + 1) % 1088 != 0 {
+        padded.push(false);
+    }
+    padded.push(true);
+    let padded_bytes: Vec<u8> = bits_to_bytes_le(&padded);
+    padded_bytes.chunks(SHAKE256_BLOCK_LENGTH_BYTES)
+        .map(|chunk| chunk.try_into().unwrap())
+        .collect()
+}
+
 pub fn shake256_gadget<E, CS>(mut cs: CS, preimage_bits: &[Boolean], d: usize) -> Result<Vec<Boolean>, SynthesisError>
 where
     E: PrimeField,
@@ -292,7 +319,31 @@ mod test {
     use bellpepper_core::boolean::AllocatedBit;
     use bellpepper_core::test_cs::TestConstraintSystem;
     use pasta_curves::Fp;
-    use crate::utils::{bytes_to_bits_le, bits_to_bytes_le,shake_256};
+    use crate::utils::{bits_to_bytes_le,shake_256};
+    #[test]
+    fn test_keccak_f_1600() {
+        let mut cs = TestConstraintSystem::<Fp>::new();
+
+        // dummy test input
+        let input: Vec<Boolean> = (0..1600)
+            .map(|i| {
+                Boolean::from(
+                    AllocatedBit::alloc(cs.namespace(|| format!("input bit {}", i)), Some(false))
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        let _output = keccak_f_1600::<Fp, _>(cs.namespace(|| "keccak_f_1600"), &input).unwrap();
+
+        if !cs.is_satisfied() {
+            println!("Unsatisfied constraint: {:?}", cs.which_is_unsatisfied());
+        }
+        assert!(cs.is_satisfied(), "Constraint system is not satisfied!");
+
+        println!("keccak_f_1600 constraints: {}", cs.num_constraints());
+    }
+    
     #[test]
     fn test_shake256_gadget() {
         let preimage: Vec<u8> = b"hello world".to_vec();
@@ -348,103 +399,3 @@ mod test {
         println!("Number of constraints: {}", cs.num_constraints());
     }
 }
-
-
-// pub fn keccak256<E, CS>(cs: CS, input: &[Boolean]) -> Result<Vec<Boolean>, SynthesisError>
-// where
-//     E: PrimeField,
-//     CS: ConstraintSystem<E>,
-// {
-//     assert_eq!(input.len(), 512);
-
-//     let mut m = Vec::new();
-//     #[allow(clippy::needless_range_loop)]
-//     for i in 0..1600 {
-//         if i < 512 {
-//             m.push(input[i].clone());
-//         } else {
-//             m.push(Boolean::Constant(false));
-//         }
-//     }
-
-//     // # Padding
-//     // d = 2^|Mbits| + sum for i=0..|Mbits|-1 of 2^i*Mbits[i]
-//     // P = Mbytes || d || 0x00 || … || 0x00
-//     // P = P xor (0x00 || … || 0x00 || 0x80)
-//     //0x0100 ... 0080
-//     m[512] = Boolean::Constant(true);
-//     m[1087] = Boolean::Constant(true);
-
-//     // # Initialization
-//     // S[x,y] = 0,                               for (x,y) in (0…4,0…4)
-
-//     // # Absorbing phase
-//     // for each block Pi in P
-//     //   S[x,y] = S[x,y] xor Pi[x+5*y],          for (x,y) such that x+5*y < r/w
-//     //   S = Keccak-f[r+c](S)
-
-//     let m = keccak_f_1600(cs, &m)?;
-
-//     // # Squeezing phase
-//     // Z = empty string
-//     let mut z = Vec::new();
-
-//     // while output is requested
-//     //   Z = Z || S[x,y],                        for (x,y) such that x+5*y < r/w
-//     //   S = Keccak-f[r+c](S)
-//     for item in m[..256].iter() {
-//         z.push(item.clone());
-//     }
-
-//     Ok(z)
-// }
-
-// pub fn sha3<E, CS>(cs: CS, input: &[Boolean]) -> Result<Vec<Boolean>, SynthesisError>
-// where
-//     E: PrimeField,
-//     CS: ConstraintSystem<E>,
-// {
-//     assert_eq!(input.len(), 512);
-
-//     let mut m = Vec::new();
-//     #[allow(clippy::needless_range_loop)]
-//     for i in 0..1600 {
-//         if i < 512 {
-//             m.push(input[i].clone());
-//         } else {
-//             m.push(Boolean::Constant(false));
-//         }
-//     }
-
-//     // # Padding
-//     // d = 0x06
-//     // P = Mbytes || d || 0x00 || … || 0x00
-//     // P = P xor (0x00 || … || 0x00 || 0x80)
-//     //0x0600 ... 0080
-//     m[513] = Boolean::Constant(true);
-//     m[514] = Boolean::Constant(true);
-//     m[1087] = Boolean::Constant(true);
-
-//     // # Initialization
-//     // S[x,y] = 0,                               for (x,y) in (0…4,0…4)
-
-//     // # Absorbing phase
-//     // for each block Pi in P
-//     //   S[x,y] = S[x,y] xor Pi[x+5*y],          for (x,y) such that x+5*y < r/w
-//     //   S = Keccak-f[r+c](S)
-
-//     let m = keccak_f_1600(cs, &m)?;
-
-//     // # Squeezing phase
-//     // Z = empty string
-//     let mut z = Vec::new();
-
-//     // while output is requested
-//     //   Z = Z || S[x,y],                        for (x,y) such that x+5*y < r/w
-//     //   S = Keccak-f[r+c](S)
-//     for item in m[..256].iter() {
-//         z.push(item.clone());
-//     }
-
-//     Ok(z)
-// }

@@ -122,7 +122,9 @@ impl Polynomial {
     /// hash a message into a polynomial
     pub fn from_hash_of_message(message: &[u8], nonce: &[u8]) -> Self {
         // initialize and finalize the rng
+        // NOTE shake256.init is using 0^{1600} and not random
         let mut rng = shake256_context::init();
+        // TODO this needs to be inject(nonce || message), 
         rng.inject(nonce);
         rng.inject(message);
         rng.finalize();

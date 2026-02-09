@@ -119,8 +119,8 @@ impl<F: PrimeField> ConstraintSynthesizer<F> for FalconSchoolBookVerificationCir
             // Ensure v[i] = hm[i] - (sig * pk)[i] mod MODULUS
 
             // current_col = sig * pk[i] mod q
-            // NOTE c[i] = sum_{j=0}^{N−1} sig[j] * pk[(i − j) mod N] * sgn(i − j),
-            //  NOTE c[i] = sum_{i+j=i} sig[i]*pk[j] − sum_{i+j=k+N} sig[i]*pk[j] (mod q)
+            // NOTE current_col_i = sum_{j=0}^{N−1} sig[j] * pk[(i − j) mod N] * sgn(i − j),
+            //  NOTE current_col_i = sum_{i+j=i} sig[i]*pk[j] − sum_{i+j=k+N} sig[i]*pk[j] (mod q)
             // NOTE creates 29 + 512 constraints
             let current_col: FpVar<F> = inner_product_mod(
                 cs.clone(),

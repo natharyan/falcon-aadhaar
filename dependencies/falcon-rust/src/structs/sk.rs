@@ -54,7 +54,7 @@ impl SecretKey {
         let sig_len = &mut (SIG_LEN as u64);
         let sig_type = 2;
         let mut buf = [0u8; SIGN_BUF_LEN];
-
+        // println!("Degree of polynomial = {}", N);
         unsafe {
             assert!(
                 falcon_sign_dyn(
