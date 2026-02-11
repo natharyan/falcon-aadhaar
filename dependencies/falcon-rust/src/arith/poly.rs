@@ -124,7 +124,7 @@ impl Polynomial {
         // initialize and finalize the rng
         // NOTE shake256.init is using 0^{1600} and not random
         let mut rng = shake256_context::init();
-        // TODO this needs to be inject(nonce || message), 
+        // TODO this needs to be inject(nonce || message),
         rng.inject(nonce);
         rng.inject(message);
         rng.finalize();

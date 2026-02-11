@@ -1,13 +1,16 @@
 use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking, pack_bits};
 use bellpepper_core::{
-    ConstraintSystem, LinearCombination, SynthesisError, boolean::{AllocatedBit, Boolean}, num::AllocatedNum, test_cs::TestConstraintSystem
+    ConstraintSystem, LinearCombination, SynthesisError,
+    boolean::{AllocatedBit, Boolean},
+    num::AllocatedNum,
+    test_cs::TestConstraintSystem,
 };
 use bellpepper_nonnative::{
-    mp::bignat::{nat_to_limbs, BigNat},
+    mp::bignat::{BigNat, nat_to_limbs},
     util::{bit::Bit, gadget::Gadget, num::Num},
 };
 
-use falcon_rust::{Polynomial, MODULUS, N};
+use falcon_rust::{MODULUS, N, Polynomial};
 use ff::{PrimeField, PrimeFieldBits};
 use nova_snark::traits::circuit::StepCircuit;
 use num_bigint::{BigInt, Sign};
@@ -21,10 +24,10 @@ use nova_aadhaar_qr::{
     //     emsa_pkcs1v15_encode, BIGNAT_LIMB_WIDTH, BIGNAT_NUM_LIMBS, RSA_MODULUS_HEX_BYTES,
     //     RSA_MODULUS_LENGTH_BYTES,
     // },
-    sha256::{
-        sha256_digest_to_scalars, sha256_initial_digest_scalars, sha256_msg_block_sequence,
-        sha256_state_to_bytes, SHA256_BLOCK_LENGTH_BYTES, SHA256_DIGEST_LENGTH_BYTES, SHA256_IV,
-    },
+    // sha256::{
+    //     SHA256_BLOCK_LENGTH_BYTES, SHA256_DIGEST_LENGTH_BYTES, SHA256_IV, sha256_digest_to_scalars,
+    //     sha256_initial_digest_scalars, sha256_msg_block_sequence, sha256_state_to_bytes,
+    // },
     util::{
         alloc_constant, alloc_num_equals, alloc_num_equals_constant, bignat_to_allocatednum_limbs,
         boolean_implies, check_decomposition, conditionally_select,
@@ -35,11 +38,17 @@ use nova_aadhaar_qr::{
 
 use crate::{
     dob::{
-        DOB_INDEX_BIT_LENGTH, calculate_age_in_years, delimiter_count_before_and_within_dob_is_correct, get_day_month_year_conditional, left_shift_bytes
+        DOB_INDEX_BIT_LENGTH, calculate_age_in_years,
+        delimiter_count_before_and_within_dob_is_correct, get_day_month_year_conditional,
+        left_shift_bytes,
     },
+    falcon_incremental_verify::library_hashtocoeffs,
     qr::{AadhaarQRData, parse_aadhaar_qr_data},
-    shake256::{shake256_gadget, shake256_inject, SHAKE256_BLOCK_LENGTH_BITS, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, shake256_msg_blocks},
-    utils::{library_step_sponge, library_hashtocoeffs, bytes_to_bits_le, bits_to_bytes_le}
+    shake256::{
+        SHAKE256_BLOCK_LENGTH_BITS, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS,
+        SHAKE256_DIGEST_LENGTH_BYTES, shake256_gadget, shake256_inject, shake256_msg_blocks,
+    },
+    utils::{bits_to_bytes_le, bytes_to_bits_le, library_step_sponge},
 };
 
 // pub const NUM_OPCODE_BITS: usize = 6; // 1 MSB for SHA256 + 5 LSBs for RSA
@@ -129,7 +138,8 @@ where
     }
 
     pub fn calc_initial_primary_circuit_input(current_date_bytes: &[u8]) -> Vec<Scalar> {
-        let initial_opcode = Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
+        let initial_opcode =
+            Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
 
         let current_date_bits = bytes_to_bits(current_date_bytes);
         let current_date_scalars = compute_multipacking::<Scalar>(&current_date_bits);
@@ -149,7 +159,7 @@ where
 
         // Get the public key to verify the signature
         let h: Polynomial = (&aadhaar_qr_data.public_key).into();
-        
+
         let mut coeff_index: u64 = 0;
         let mut next_shake_opcode: u64 = OP_SHAKE256_ACTIVE;
 
@@ -157,26 +167,19 @@ where
         let mut ctx_absorb = [false; SHAKE256_DIGEST_LENGTH_BITS];
         let mut ctx_squeeze = [false; SHAKE256_DIGEST_LENGTH_BITS];
         let mut ctx_inject = [false; SHAKE256_DIGEST_LENGTH_BITS];
-        
+
         let mut l2_norm_sum: u16 = 0;
 
         // s2 = Decompress(falcon_sig(aadhaar_qr_data.signed_data))
         let s2: Polynomial = (&aadhaar_qr_data.falcon_signature).into();
 
         let mut prev_nullifier = Scalar::ZERO;
-        
+
         let first_opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST;
-        let first_next_shake256_opcode = if shake256_msg_blocks.len() == 1 {
-            1
-        } else {
-            0
-        };
-        
+        let first_next_shake256_opcode = if shake256_msg_blocks.len() == 1 { 1 } else { 0 };
+
         let first_shake256_msg_block: [u8; SHAKE256_BLOCK_LENGTH_BYTES] =
-            [shake256_msg_blocks[0]]
-                .concat()
-                .try_into()
-                .unwrap();
+            [shake256_msg_blocks[0]].concat().try_into().unwrap();
         for m_i in shake256_msg_blocks.iter() {
             let m_i_bits = bytes_to_bits_le(m_i);
             ctx_inject = library_step_sponge(ctx_inject.to_vec(), Some(m_i_bits), 1088, false);
@@ -215,33 +218,27 @@ where
         if shake256_msg_blocks.len() > t {
             t = shake256_msg_blocks.len()
         }
-        
+
         let mut sum_aggregated: u16 = 0;
-        (coeff_index, sum_aggregated, ctx_squeeze) = library_hashtocoeffs(
-            ctx_squeeze,
-            MODULUS,
-             coeff_index,
-             s2,
-             true,
-             h
-        );
+        (coeff_index, sum_aggregated, ctx_squeeze) =
+            library_hashtocoeffs(ctx_squeeze, MODULUS, coeff_index, s2, true, h);
         l2_norm_sum = l2_norm_sum + sum_aggregated;
         ctx_absorb = library_step_sponge(ctx_absorb.to_vec(), None, 1088, true);
 
         // Append public input and auxiliary input for next t-1 steps
-        for i in 1..=t-1 {
+        for i in 1..=t - 1 {
             let mut shake256_msg_block = shake256_msg_blocks[i];
-            let mut opcode;     
+            let mut opcode;
 
             if i < shake256_msg_blocks.len() {
                 shake256_msg_block = shake256_msg_blocks[i];
                 opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + (coeff_index);
                 next_shake_opcode = OP_SHAKE256_ACTIVE;
-            } if i == shake256_msg_blocks.len() {
+            }
+            if i == shake256_msg_blocks.len() {
                 shake256_msg_block = [0u8; SHAKE256_BLOCK_LENGTH_BYTES];
                 opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + (coeff_index);
                 next_shake_opcode = OP_SHAKE256_NO_OP;
-
             } else {
                 shake256_msg_block = [0u8; SHAKE256_BLOCK_LENGTH_BYTES];
                 opcode = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + (coeff_index);
@@ -266,17 +263,12 @@ where
             // TODO update l2_norm_sum (update_l2_norm_coeff_index())
             // TODO update ctx_squeeze and ctx_absorb
             let flag_coeff: bool = coeff_index < 512;
-            (coeff_index, sum_aggregated, ctx_squeeze) = library_hashtocoeffs(
-                ctx_squeeze,
-                MODULUS,
-                coeff_index,
-                s2,
-                flag_coeff,
-                h
-            );
+            (coeff_index, sum_aggregated, ctx_squeeze) =
+                library_hashtocoeffs(ctx_squeeze, MODULUS, coeff_index, s2, flag_coeff, h);
             l2_norm_sum = l2_norm_sum + sum_aggregated;
             ctx_absorb = library_step_sponge(ctx_absorb.to_vec(), None, 1088, true);
         }
+
         aadhaar_steps
     }
 }
@@ -295,32 +287,39 @@ where
         z: &[AllocatedNum<Scalar>],
     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
         let opcode = &z[0];
-        let next_opcode = AllocatedNum::alloc(cs.namespace(|| "next opcode"), || {
-            Ok(Scalar::from(self.next_opcode))
-        })?;
-        // check that opcode fits in 6 bits
+        // let next_opcode = AllocatedNum::alloc(cs.namespace(|| "next opcode"), || {
+        //     Ok(Scalar::from(self.next_opcode))
+        // })?;
+        // check that opcode fits in 10 bits
         let opcode_bits_le =
             num_to_bits(cs.namespace(|| "Decompose opcode"), opcode, NUM_OPCODE_BITS)?;
-        let sha256_opcode = opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
-        let rsa_opcode_bits_le = opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
+        let current_shake_opcode = opcode_bits_le[NUM_COEFF_INDEX_BITS as usize].clone();
+        let coeff_index_le = opcode_bits_le[..NUM_COEFF_INDEX_BITS as usize].to_vec();
+        // let sha256_opcode = opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
+        // let rsa_opcode_bits_le = opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
 
-        let rsa_opcode = AllocatedNum::alloc(cs.namespace(|| "RSA opcode"), || {
-            Ok(Scalar::from(self.opcode & RSA_OPCODE_MASK))
+        let coeff_index = AllocatedNum::alloc(cs.namespace(|| "RSA opcode"), || {
+            Ok(Scalar::from(self.opcode & COEFF_INDEX_MASK))
         })?;
 
         // check allocated RSA opcode matches with input opcode bits
         check_decomposition(
             cs.namespace(|| "check RSA opcode allocation"),
-            &rsa_opcode,
-            rsa_opcode_bits_le,
+            &coeff_index,
+            coeff_index_le,
         )?;
+        // check_decomposition(
+        //     cs.namespace(|| "check RSA opcode allocation"),
+        //     &rsa_opcode,
+        //     rsa_opcode_bits_le,
+        // )?;
 
-        // check that next opcode fits in 6 bits
-        let next_opcode_bits_le = num_to_bits(
-            cs.namespace(|| "Decompose next opcode"),
-            &next_opcode,
-            NUM_OPCODE_BITS,
-        )?;
+        // check that next opcode fits in 10 bits
+        // let next_opcode_bits_le = num_to_bits(
+        //     cs.namespace(|| "Decompose next opcode"),
+        //     &next_opcode,
+        //     NUM_OPCODE_BITS,
+        // )?;
         let next_sha256_opcode = next_opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
         let next_rsa_opcode_bits_le = next_opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
 
@@ -754,8 +753,8 @@ where
         let new_io_hash = aadhaar_io_hasher
             .hash_in_circuit(&mut cs.namespace(|| "hash IO"), &io_allocatednums)?;
 
+        // TODO need to create the value of next_opcode as it is not an auxiliary input.
         let last_z_out = vec![next_opcode.clone(), nullifier];
-
         let z_out = conditionally_select_vec(
             cs.namespace(|| "Choose between outputs of last opcode and others"),
             &last_z_out,

@@ -16,7 +16,6 @@ sha2 = { version = "0.10.8", default-features = false, features = ["compress"] }
 pasta_curves = { version = "0.5.1", default-features = false }
 generic-array = "1.0.0"
 hex = "0.4.3"
-num-bigint = "0.4.4"
 neptune = { version = "13.0.0", default-features = false }
 clap = "4.5.4"
 image = "0.25.2"
@@ -31,7 +30,8 @@ proptest = "1.9.0"
 rand_xorshift = "0.5.0"
 keccak = "0.1.5"
 sha3 = "0.10.8"
-math = "0.11.0"
+num-bigint = { version = "0.4", default-features = false}
+num-traits = "0.2.19"
 
 [features]
 default = [ "falcon-512", "parallel" ]

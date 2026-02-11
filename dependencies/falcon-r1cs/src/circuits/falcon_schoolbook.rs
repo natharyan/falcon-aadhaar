@@ -118,9 +118,9 @@ impl<F: PrimeField> ConstraintSynthesizer<F> for FalconSchoolBookVerificationCir
         for i in 0..N {
             // Ensure v[i] = hm[i] - (sig * pk)[i] mod MODULUS
 
-            // current_col = sig * pk[i] mod q
+            // current_col = (sig * pk)[i] mod q
             // NOTE current_col_i = sum_{j=0}^{N−1} sig[j] * pk[(i − j) mod N] * sgn(i − j),
-            //  NOTE current_col_i = sum_{i+j=i} sig[i]*pk[j] − sum_{i+j=k+N} sig[i]*pk[j] (mod q)
+            //  NOTE current_col_k = sum_{i+j=k} sig[i]*pk[j] − sum_{i+j=k+N} sig[i]*pk[j] (mod q)
             // NOTE creates 29 + 512 constraints
             let current_col: FpVar<F> = inner_product_mod(
                 cs.clone(),
@@ -130,7 +130,7 @@ impl<F: PrimeField> ConstraintSynthesizer<F> for FalconSchoolBookVerificationCir
                 &const_q_var,
             )?;
 
-            // rhs = hm + q - sig * pk[i] mod q
+            // rhs = hm + q - (sig * pk)[i] mod q
             // NOTE + q is added to ensure hm[i] − current_col is non-negative in the R1CS field
             let rhs: FpVar<F> = &hm_vars[i] + &const_q_var - &current_col;
 

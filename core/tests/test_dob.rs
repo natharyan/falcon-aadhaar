@@ -171,9 +171,7 @@ fn test_age_calculation_with_qr_png() {
     let keypair = KeyPair::keygen();
     let seed = "test seed".as_ref();
     let sig_message = &signed_data;
-    let sig: Signature = keypair
-        .secret_key
-        .sign_with_seed(seed, sig_message);
+    let sig: Signature = keypair.secret_key.sign_with_seed(seed, sig_message);
 
     assert!(keypair.public_key.verify_rust(sig_message.as_ref(), &sig));
     println!("Falcon signature verification PASSED!");

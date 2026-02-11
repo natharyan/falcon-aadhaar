@@ -1,7 +1,7 @@
 // Referenced from nova-aadhaar-qr create, modified to include falcon signature
 
 use bincode::config;
-use falcon_rust::{KeyPair, Signature, PublicKey};
+use falcon_rust::{KeyPair, PublicKey, Signature};
 use std::io::Error;
 
 pub const DELIMITER: u8 = 255;
@@ -18,7 +18,7 @@ pub struct AadhaarQRData {
     pub rsa_signature: Vec<u8>,
     pub falcon_signature: Signature,
     pub dob_byte_index: usize,
-    pub public_key: PublicKey
+    pub public_key: PublicKey,
 }
 
 // #[cfg(feature = "falcon-512")]
@@ -59,9 +59,7 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
     let keypair = KeyPair::keygen();
     let seed = "UIDAI seed".as_ref();
     let sig_message = &qr_data[0..qr_data_len - 256];
-    let sig: falcon_rust::Signature = keypair
-        .secret_key
-        .sign_with_seed(seed, sig_message);
+    let sig: falcon_rust::Signature = keypair.secret_key.sign_with_seed(seed, sig_message);
 
     assert!(keypair.public_key.verify_rust(sig_message.as_ref(), &sig));
     println!("Falcon signature verification PASSED!");
@@ -71,6 +69,6 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
         rsa_signature: qr_data[qr_data_len - 256..].to_vec(), // Last 256 bytes have the RSA signature
         falcon_signature: sig, // falcon signature over all bytes except the last 256 bytes
         dob_byte_index,
-        public_key: keypair.public_key
+        public_key: keypair.public_key,
     })
 }

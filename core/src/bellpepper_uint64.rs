@@ -513,7 +513,7 @@ mod test {
     use ff::Field;
     use proptest::prelude::*;
     use rand_core::Rng;
-    use rand_core::{SeedableRng as _};
+    use rand_core::SeedableRng as _;
     use rand_xorshift::XorShiftRng;
     use std::convert::TryInto;
 
