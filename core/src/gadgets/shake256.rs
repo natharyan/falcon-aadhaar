@@ -8,7 +8,7 @@ use bellpepper_core::SynthesisError;
 use bellpepper_core::boolean::Boolean;
 use proptest::bits;
 
-use crate::bellpepper_uint64::UInt64;
+use crate::gadgets::bellpepper_uint64::UInt64;
 use crate::utils::{
     arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le, library_step_sponge,
     vec_bool_to_arr_u64,

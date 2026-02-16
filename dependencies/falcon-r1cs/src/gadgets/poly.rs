@@ -94,6 +94,7 @@ impl<F: PrimeField> NTTPolyVar<F> {
         &self.0
     }
 
+    // ANCHOR - ntt_circuit
     /// The circuit to convert a poly into its NTT form
     /// Cost 15360 constraints.
     /// Inputs:

@@ -1,9 +1,10 @@
 use std::ops::Add;
 
 use crate::{
-    bellpepper_uint64::UInt64,
+    gadgets::bellpepper_uint64::UInt64,
     shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, keccak_f_1600},
-    utils::{bits_to_bytes_le, bytes_to_bits_le, library_step_sponge, mod_q, select_from_vector_512, inner_product_mod},
+    utils::{bits_to_bytes_le, bytes_to_bits_le, library_step_sponge, mod_q, inner_product_mod},
+    gadgets::ntt_poly_mult::*,
 };
 use bellpepper::gadgets::multipack;
 use bellpepper_core::{boolean::Boolean, num::AllocatedNum, ConstraintSystem, SynthesisError};
@@ -35,7 +36,7 @@ pub(crate) fn library_hashtocoeffs(
         let flag_success = t < k * q;
         let update_flag = flag_success && flag_coeff;
         let c = t % q;
-        let s1_coeff = c - s2_h.coeff()[coeff_index as usize];
+        let s1_coeff = c - s2_h.coeff()[coeff_index as usize]; // TODO: use mod_q here
         let mut sum_update: u16 = 0;
         if update_flag {
             sum_update =
@@ -72,22 +73,25 @@ where
 
     let modulus_var = alloc_constant(cs.namespace(|| "modulus_var in hashtocoeffs"), Scalar::from(MODULUS as u64))?;
 
-    let buffer_pk_poly = buffer_pk(h_poly)?; // TODO
+    let s2_h: Vec<AllocatedNum<Scalar>> = ntt_mult(cs.namespace(|| "ntt mult"), s2, h_poly)?; // TODO
+    // sampling with rejection corresponding to no update in coeff_index and sum_aggregated
     for i in 1..=68 {
         let t_bits: Vec<Boolean> = ctx[extract_ctr..extract_ctr + 16].to_vec();
+        
         // evaluate using big-endian bits to u16
         let mut t_reverse: Vec<Boolean> = Vec::with_capacity(16);
         for j in 0..16 {
             t_reverse.push(t_bits[15 - j].clone());
         }
         let t: AllocatedNum<Scalar> = multipack::pack_bits(cs.namespace(|| "pack bits"), &t_reverse)?;
+
         let flag_success = less_than(cs.namespace(|| "flag success"), &t, &kq, 16)?;
         let update_flag = Boolean::and(cs.namespace(|| "update flag"), &flag_success, flag_coeff)?;
         let c = mod_q(cs.namespace(|| "c = t mod q"), &t)?;
 
+        
 
-
-        let s1_coeff: AllocatedNum<Scalar> = inner_product_mod(cs.namespace(|| "s1_coeff"), &c, s2, modulus_var)?; // TODO
+        let s1_coeff: AllocatedNum<Scalar> = select_from_vector_512(cs, s2_h, &coeff_index)?;
         let s2_coeff_index = select_from_vector_512(cs.namespace(||"select_from_vector"), s2, &coeff_index)?;
 
         let zero_alloc = alloc_constant(cs, Scalar::from(0u64))?;

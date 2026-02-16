@@ -16,3 +16,6 @@ We design and implement Falcon signature verification as an incremental computat
 - [`dependencies/nova-aadhaar-qr/`](dependencies/nova-aadhaar-qr/) - Implementation of
   <a href="https://www.ee.iitb.ac.in/~sarva/zk/aadhaar-age-proof.pdf" target="_blank">Nova Aadhaar</a>,
   sourced from <a href="https://github.com/avras/nova-aadhaar-qr" target="_blank">avras/nova-aadhaar-qr</a>.
+
+## In progress
+- The HashToCoeffs function is being optimized to get lesser constraints than normal NTT based falcon signature verification.

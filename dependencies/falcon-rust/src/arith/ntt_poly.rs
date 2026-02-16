@@ -8,7 +8,7 @@ use rand_core::{CryptoRng, RngCore, SeedableRng};
 use std::ops::{Add, Mul, Sub};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct NTTPolynomial(pub(crate) [u16; N]);
+pub struct NTTPolynomial(pub [u16; N]);
 
 impl Default for NTTPolynomial {
     fn default() -> Self {

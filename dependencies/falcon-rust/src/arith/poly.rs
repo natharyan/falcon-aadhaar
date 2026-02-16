@@ -5,7 +5,7 @@ use rand_core::{CryptoRng, RngCore, SeedableRng};
 use std::ops::{Add, Mul, Sub};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub struct Polynomial(pub(crate) [u16; N]);
+pub struct Polynomial(pub [u16; N]);
 
 impl Default for Polynomial {
     fn default() -> Self {

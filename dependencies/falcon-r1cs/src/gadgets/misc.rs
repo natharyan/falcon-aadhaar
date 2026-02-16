@@ -77,6 +77,7 @@ pub fn ntt_param_var<F: PrimeField>(
 }
 
 #[allow(dead_code)]
+//ANCHOR - inv_ntt table
 pub(crate) fn inv_ntt_param_var<F: PrimeField>(
     cs: ConstraintSystemRef<F>,
 ) -> Result<Vec<FpVar<F>>, SynthesisError> {

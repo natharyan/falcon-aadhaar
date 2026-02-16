@@ -12,6 +12,7 @@ pub use ntt_poly::NTTPolynomial;
 pub use param::{INV_NTT_TABLE, NTT_TABLE};
 pub use poly::Polynomial;
 
+// ANCHOR - ntt and inv_ntt functions in the clear
 /// convert a polynomial into its NTT form
 pub(crate) fn ntt(input: &Polynomial) -> NTTPolynomial {
     let mut output = input.0;

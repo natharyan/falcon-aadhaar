@@ -1,767 +1,767 @@
-use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking, pack_bits};
-use bellpepper_core::{
-    ConstraintSystem, LinearCombination, SynthesisError,
-    boolean::{AllocatedBit, Boolean},
-    num::AllocatedNum,
-    test_cs::TestConstraintSystem,
-};
-use bellpepper_nonnative::{
-    mp::bignat::{BigNat, nat_to_limbs},
-    util::{bit::Bit, gadget::Gadget, num::Num},
-};
+// use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking, pack_bits};
+// use bellpepper_core::{
+//     ConstraintSystem, LinearCombination, SynthesisError,
+//     boolean::{AllocatedBit, Boolean},
+//     num::AllocatedNum,
+//     test_cs::TestConstraintSystem,
+// };
+// use bellpepper_nonnative::{
+//     mp::bignat::{BigNat, nat_to_limbs},
+//     util::{bit::Bit, gadget::Gadget, num::Num},
+// };
 
-use falcon_rust::{MODULUS, N, Polynomial};
-use ff::{PrimeField, PrimeFieldBits};
-use nova_snark::traits::circuit::StepCircuit;
-use num_bigint::{BigInt, Sign};
-use sha2::{compress256, digest::generic_array::GenericArray};
+// use falcon_rust::{MODULUS, N, Polynomial};
+// use ff::{PrimeField, PrimeFieldBits};
+// use nova_snark::traits::circuit::StepCircuit;
+// use num_bigint::{BigInt, Sign};
+// use sha2::{compress256, digest::generic_array::GenericArray};
 
-use keccak::f1600;
+// use keccak::f1600;
 
-use nova_aadhaar_qr::{
-    poseidon::PoseidonHasher,
-    // rsa::{
-    //     emsa_pkcs1v15_encode, BIGNAT_LIMB_WIDTH, BIGNAT_NUM_LIMBS, RSA_MODULUS_HEX_BYTES,
-    //     RSA_MODULUS_LENGTH_BYTES,
-    // },
-    // sha256::{
-    //     SHA256_BLOCK_LENGTH_BYTES, SHA256_DIGEST_LENGTH_BYTES, SHA256_IV, sha256_digest_to_scalars,
-    //     sha256_initial_digest_scalars, sha256_msg_block_sequence, sha256_state_to_bytes,
-    // },
-    util::{
-        alloc_constant, alloc_num_equals, alloc_num_equals_constant, bignat_to_allocatednum_limbs,
-        boolean_implies, check_decomposition, conditionally_select,
-        conditionally_select_boolean_vec, conditionally_select_vec, less_than_or_equal,
-        num_to_bits,
-    },
-};
+// use nova_aadhaar_qr::{
+//     poseidon::PoseidonHasher,
+//     // rsa::{
+//     //     emsa_pkcs1v15_encode, BIGNAT_LIMB_WIDTH, BIGNAT_NUM_LIMBS, RSA_MODULUS_HEX_BYTES,
+//     //     RSA_MODULUS_LENGTH_BYTES,
+//     // },
+//     // sha256::{
+//     //     SHA256_BLOCK_LENGTH_BYTES, SHA256_DIGEST_LENGTH_BYTES, SHA256_IV, sha256_digest_to_scalars,
+//     //     sha256_initial_digest_scalars, sha256_msg_block_sequence, sha256_state_to_bytes,
+//     // },
+//     util::{
+//         alloc_constant, alloc_num_equals, alloc_num_equals_constant, bignat_to_allocatednum_limbs,
+//         boolean_implies, check_decomposition, conditionally_select,
+//         conditionally_select_boolean_vec, conditionally_select_vec, less_than_or_equal,
+//         num_to_bits,
+//     },
+// };
 
-use crate::{
-    dob::{
-        DOB_INDEX_BIT_LENGTH, calculate_age_in_years,
-        delimiter_count_before_and_within_dob_is_correct, get_day_month_year_conditional,
-        left_shift_bytes,
-    },
-    falcon_incremental_verify::library_hashtocoeffs,
-    qr::{AadhaarQRData, parse_aadhaar_qr_data},
-    shake256::{
-        SHAKE256_BLOCK_LENGTH_BITS, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS,
-        SHAKE256_DIGEST_LENGTH_BYTES, shake256_gadget, shake256_inject, shake256_msg_blocks,
-    },
-    utils::{bits_to_bytes_le, bytes_to_bits_le, library_step_sponge},
-};
+// use crate::{
+//     dob::{
+//         DOB_INDEX_BIT_LENGTH, calculate_age_in_years,
+//         delimiter_count_before_and_within_dob_is_correct, get_day_month_year_conditional,
+//         left_shift_bytes,
+//     },
+//     falcon_incremental_verify::library_hashtocoeffs,
+//     qr::{AadhaarQRData, parse_aadhaar_qr_data},
+//     shake256::{
+//         SHAKE256_BLOCK_LENGTH_BITS, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS,
+//         SHAKE256_DIGEST_LENGTH_BYTES, shake256_gadget, shake256_inject, shake256_msg_blocks,
+//     },
+//     utils::{bits_to_bytes_le, bytes_to_bits_le, library_step_sponge},
+// };
 
-// pub const NUM_OPCODE_BITS: usize = 6; // 1 MSB for SHA256 + 5 LSBs for RSA
-// pub const NUM_RSA_OPCODE_BITS: u64 = 5;
-// pub const RSA_OPCODE_MASK: u64 = (1 << NUM_RSA_OPCODE_BITS) - 1;
-// pub const OP_SHA256_ACTIVE: u64 = 0;
-// pub const OP_SHA256_NOOP: u64 = 1;
-// pub const OP_RSA_FIRST: u64 = 0;
-// pub const OP_RSA_LAST: u64 = 16;
-// pub const OP_CODE_LAST: u64 = (OP_SHA256_NOOP << NUM_RSA_OPCODE_BITS) + OP_RSA_LAST;
+// // pub const NUM_OPCODE_BITS: usize = 6; // 1 MSB for SHA256 + 5 LSBs for RSA
+// // pub const NUM_RSA_OPCODE_BITS: u64 = 5;
+// // pub const RSA_OPCODE_MASK: u64 = (1 << NUM_RSA_OPCODE_BITS) - 1;
+// // pub const OP_SHA256_ACTIVE: u64 = 0;
+// // pub const OP_SHA256_NOOP: u64 = 1;
+// // pub const OP_RSA_FIRST: u64 = 0;
+// // pub const OP_RSA_LAST: u64 = 16;
+// // pub const OP_CODE_LAST: u64 = (OP_SHA256_NOOP << NUM_RSA_OPCODE_BITS) + OP_RSA_LAST;
 
-// TODO change OP_SHAKE256_ACTIVE to type bool
-pub const NUM_OPCODE_BITS: usize = 10; // 1 MSB for SHA256 + 5 LSBs for RSA
-pub const NUM_COEFF_INDEX_BITS: u64 = 9;
-pub const COEFF_INDEX_MASK: u64 = (1 << NUM_COEFF_INDEX_BITS) - 1;
-pub const OP_SHAKE256_ACTIVE: u64 = 0;
-pub const OP_SHAKE256_NO_OP: u64 = 1;
-pub const OP_COEFF_INDEX_FIRST: u64 = 0;
-pub const OP_COEFF_INDEX_LAST: u64 = 511;
-pub const OP_CODE_LAST: u64 = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_LAST;
+// // TODO change OP_SHAKE256_ACTIVE to type bool
+// pub const NUM_OPCODE_BITS: usize = 10; // 1 MSB for SHA256 + 5 LSBs for RSA
+// pub const NUM_COEFF_INDEX_BITS: u64 = 9;
+// pub const COEFF_INDEX_MASK: u64 = (1 << NUM_COEFF_INDEX_BITS) - 1;
+// pub const OP_SHAKE256_ACTIVE: u64 = 0;
+// pub const OP_SHAKE256_NO_OP: u64 = 1;
+// pub const OP_COEFF_INDEX_FIRST: u64 = 0;
+// pub const OP_COEFF_INDEX_LAST: u64 = 511;
+// pub const OP_CODE_LAST: u64 = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_LAST;
 
-const DATE_LENGTH_BYTES: usize = 10;
-const TIMESTAMP_START_BYTE_INDEX: usize = 9;
-const NAME_START_BYTE_INDEX: usize = 27;
+// const DATE_LENGTH_BYTES: usize = 10;
+// const TIMESTAMP_START_BYTE_INDEX: usize = 9;
+// const NAME_START_BYTE_INDEX: usize = 27;
 
-#[derive(Clone, Debug)]
-pub struct AadhaarAgeProofCircuit<Scalar>
-where
-    Scalar: PrimeField,
-{
-    opcode: u64,
-    next_shake_opcode: u64,
-    shake256_msg_block: [u8; SHAKE256_BLOCK_LENGTH_BYTES],
-    dob_byte_index: usize,
-    l2_norm_sum: u16,
-    ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
-    ctx_squeeze: [bool; SHAKE256_DIGEST_LENGTH_BITS],
-    ctx_inject: [bool; SHAKE256_DIGEST_LENGTH_BITS],
-    s2: Polynomial,
-    prev_nullifier: Scalar,
-}
+// #[derive(Clone, Debug)]
+// pub struct AadhaarAgeProofCircuit<Scalar>
+// where
+//     Scalar: PrimeField,
 // {
 //     opcode: u64,
-//     next_opcode: u64,
-//     num_sha256_msg_blocks_even: bool,
+//     next_shake_opcode: u64,
+//     shake256_msg_block: [u8; SHAKE256_BLOCK_LENGTH_BYTES],
 //     dob_byte_index: usize,
-//     sha256_msg_block_pair: [u8; 2 * SHA256_BLOCK_LENGTH_BYTES],
-//     current_sha256_digest_bytes: [u8; SHA256_DIGEST_LENGTH_BYTES],
-//     rsa_sig: [u8; RSA_MODULUS_LENGTH_BYTES],
+//     l2_norm_sum: u16,
+//     ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
+//     ctx_squeeze: [bool; SHAKE256_DIGEST_LENGTH_BITS],
+//     ctx_inject: [bool; SHAKE256_DIGEST_LENGTH_BITS],
+//     s2: Polynomial,
 //     prev_nullifier: Scalar,
-//     rsa_sig_power: [Scalar; BIGNAT_NUM_LIMBS],
+// }
+// // {
+// //     opcode: u64,
+// //     next_opcode: u64,
+// //     num_sha256_msg_blocks_even: bool,
+// //     dob_byte_index: usize,
+// //     sha256_msg_block_pair: [u8; 2 * SHA256_BLOCK_LENGTH_BYTES],
+// //     current_sha256_digest_bytes: [u8; SHA256_DIGEST_LENGTH_BYTES],
+// //     rsa_sig: [u8; RSA_MODULUS_LENGTH_BYTES],
+// //     prev_nullifier: Scalar,
+// //     rsa_sig_power: [Scalar; BIGNAT_NUM_LIMBS],
+// // }
+
+// impl<Scalar> Default for AadhaarAgeProofCircuit<Scalar>
+// where
+//     Scalar: PrimeField,
+// {
+//     fn default() -> Self {
+//         Self {
+//             opcode: 0,
+//             next_shake_opcode: 0,
+//             shake256_msg_block: [0u8; SHAKE256_BLOCK_LENGTH_BYTES],
+//             dob_byte_index: 0,
+//             l2_norm_sum: 0,
+//             ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
+//             ctx_squeeze: [false; SHAKE256_DIGEST_LENGTH_BITS],
+//             ctx_inject: [false; SHAKE256_DIGEST_LENGTH_BITS],
+//             s2: Polynomial::default(),
+//             prev_nullifier: Scalar::ZERO,
+//         }
+//     }
 // }
 
-impl<Scalar> Default for AadhaarAgeProofCircuit<Scalar>
-where
-    Scalar: PrimeField,
-{
-    fn default() -> Self {
-        Self {
-            opcode: 0,
-            next_shake_opcode: 0,
-            shake256_msg_block: [0u8; SHAKE256_BLOCK_LENGTH_BYTES],
-            dob_byte_index: 0,
-            l2_norm_sum: 0,
-            ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
-            ctx_squeeze: [false; SHAKE256_DIGEST_LENGTH_BITS],
-            ctx_inject: [false; SHAKE256_DIGEST_LENGTH_BITS],
-            s2: Polynomial::default(),
-            prev_nullifier: Scalar::ZERO,
-        }
-    }
-}
-
-impl<Scalar> AadhaarAgeProofCircuit<Scalar>
-where
-    Scalar: PrimeFieldBits,
-{
-    fn update_nullifier(prev_nullifier: Scalar, current_msg_block: &[u8]) -> Scalar {
-        assert_eq!(current_msg_block.len(), SHAKE256_BLOCK_LENGTH_BYTES);
-
-        let msg_blocks_bits = bytes_to_bits_le(current_msg_block);
-        let mut msg_blocks_scalars = compute_multipacking::<Scalar>(&msg_blocks_bits);
-        msg_blocks_scalars.insert(0, prev_nullifier);
-        let nullifier_hasher = PoseidonHasher::new(msg_blocks_scalars.len() as u32);
-        let next_nullifier = nullifier_hasher.hash(&msg_blocks_scalars);
-        next_nullifier
-    }
-
-    pub fn calc_initial_primary_circuit_input(current_date_bytes: &[u8]) -> Vec<Scalar> {
-        let initial_opcode =
-            Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
-
-        let current_date_bits = bytes_to_bits(current_date_bytes);
-        let current_date_scalars = compute_multipacking::<Scalar>(&current_date_bits);
-        assert_eq!(current_date_scalars.len(), 1);
-        let current_date_scalar = current_date_scalars[0];
-
-        // The last scalar corresponds to the current date
-        vec![initial_opcode, current_date_scalar]
-    }
-
-    pub fn new_state_sequence(
-        aadhaar_qr_data: &AadhaarQRData,
-    ) -> Vec<AadhaarAgeProofCircuit<Scalar>> {
-        let mut shake256_msg_blocks = shake256_msg_blocks(aadhaar_qr_data.signed_data.clone());
-
-        let mut aadhaar_steps = vec![];
-
-        // Get the public key to verify the signature
-        let h: Polynomial = (&aadhaar_qr_data.public_key).into();
-
-        let mut coeff_index: u64 = 0;
-        let mut next_shake_opcode: u64 = OP_SHAKE256_ACTIVE;
-
-        // initialize sponge states
-        let mut ctx_absorb = [false; SHAKE256_DIGEST_LENGTH_BITS];
-        let mut ctx_squeeze = [false; SHAKE256_DIGEST_LENGTH_BITS];
-        let mut ctx_inject = [false; SHAKE256_DIGEST_LENGTH_BITS];
-
-        let mut l2_norm_sum: u16 = 0;
-
-        // s2 = Decompress(falcon_sig(aadhaar_qr_data.signed_data))
-        let s2: Polynomial = (&aadhaar_qr_data.falcon_signature).into();
-
-        let mut prev_nullifier = Scalar::ZERO;
-
-        let first_opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST;
-        let first_next_shake256_opcode = if shake256_msg_blocks.len() == 1 { 1 } else { 0 };
-
-        let first_shake256_msg_block: [u8; SHAKE256_BLOCK_LENGTH_BYTES] =
-            [shake256_msg_blocks[0]].concat().try_into().unwrap();
-        for m_i in shake256_msg_blocks.iter() {
-            let m_i_bits = bytes_to_bits_le(m_i);
-            ctx_inject = library_step_sponge(ctx_inject.to_vec(), Some(m_i_bits), 1088, false);
-        }
-        ctx_squeeze = ctx_inject;
-
-        // First step
-        aadhaar_steps.push(Self {
-            opcode: first_opcode,
-            next_shake_opcode: first_next_shake256_opcode,
-            shake256_msg_block: first_shake256_msg_block,
-            dob_byte_index: aadhaar_qr_data.dob_byte_index,
-            l2_norm_sum: 0,
-            ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
-            ctx_squeeze: ctx_squeeze,
-            ctx_inject: ctx_inject,
-            s2: s2,
-            prev_nullifier: prev_nullifier,
-        });
-
-        // Square the signature
-        // rsa_sig_power_bigint = rsa_sig_power_bigint.modpow(&BigInt::from(2u64), &modulus_bigint);
-
-        let msg_blocks_without_timestamp: [u8; SHAKE256_BLOCK_LENGTH_BYTES] = [
-            &first_shake256_msg_block[0..TIMESTAMP_START_BYTE_INDEX],
-            &[0u8; NAME_START_BYTE_INDEX - TIMESTAMP_START_BYTE_INDEX],
-            &first_shake256_msg_block[NAME_START_BYTE_INDEX..],
-        ]
-        .concat()
-        .try_into()
-        .unwrap();
-        prev_nullifier = Self::update_nullifier(prev_nullifier, &msg_blocks_without_timestamp);
-
-        // t = max(pad101(m_r)/136,9)
-        let mut t = 9;
-        if shake256_msg_blocks.len() > t {
-            t = shake256_msg_blocks.len()
-        }
-
-        let mut sum_aggregated: u16 = 0;
-        (coeff_index, sum_aggregated, ctx_squeeze) =
-            library_hashtocoeffs(ctx_squeeze, MODULUS, coeff_index, s2, true, h);
-        l2_norm_sum = l2_norm_sum + sum_aggregated;
-        ctx_absorb = library_step_sponge(ctx_absorb.to_vec(), None, 1088, true);
-
-        // Append public input and auxiliary input for next t-1 steps
-        for i in 1..=t - 1 {
-            let mut shake256_msg_block = shake256_msg_blocks[i];
-            let mut opcode;
-
-            if i < shake256_msg_blocks.len() {
-                shake256_msg_block = shake256_msg_blocks[i];
-                opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + (coeff_index);
-                next_shake_opcode = OP_SHAKE256_ACTIVE;
-            }
-            if i == shake256_msg_blocks.len() {
-                shake256_msg_block = [0u8; SHAKE256_BLOCK_LENGTH_BYTES];
-                opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + (coeff_index);
-                next_shake_opcode = OP_SHAKE256_NO_OP;
-            } else {
-                shake256_msg_block = [0u8; SHAKE256_BLOCK_LENGTH_BYTES];
-                opcode = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + (coeff_index);
-            }
-
-            let step = Self {
-                opcode: opcode,
-                next_shake_opcode: next_shake_opcode,
-                shake256_msg_block: shake256_msg_block,
-                dob_byte_index: aadhaar_qr_data.dob_byte_index,
-                l2_norm_sum: l2_norm_sum,
-                ctx_absorb: ctx_absorb,
-                ctx_squeeze: ctx_squeeze,
-                ctx_inject: ctx_inject,
-                s2: s2,
-                prev_nullifier: prev_nullifier,
-            };
-
-            aadhaar_steps.push(step);
-
-            // TODO coeff_index = hashtocoeffs(); or just update_coeff_index();
-            // TODO update l2_norm_sum (update_l2_norm_coeff_index())
-            // TODO update ctx_squeeze and ctx_absorb
-            let flag_coeff: bool = coeff_index < 512;
-            (coeff_index, sum_aggregated, ctx_squeeze) =
-                library_hashtocoeffs(ctx_squeeze, MODULUS, coeff_index, s2, flag_coeff, h);
-            l2_norm_sum = l2_norm_sum + sum_aggregated;
-            ctx_absorb = library_step_sponge(ctx_absorb.to_vec(), None, 1088, true);
-        }
-
-        aadhaar_steps
-    }
-}
-
-impl<Scalar> StepCircuit<Scalar> for AadhaarAgeProofCircuit<Scalar>
-where
-    Scalar: PrimeFieldBits,
-{
-    fn arity(&self) -> usize {
-        2
-    }
-
-    fn synthesize<CS: ConstraintSystem<Scalar>>(
-        &self,
-        cs: &mut CS,
-        z: &[AllocatedNum<Scalar>],
-    ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
-        let opcode = &z[0];
-        // let next_opcode = AllocatedNum::alloc(cs.namespace(|| "next opcode"), || {
-        //     Ok(Scalar::from(self.next_opcode))
-        // })?;
-        // check that opcode fits in 10 bits
-        let opcode_bits_le =
-            num_to_bits(cs.namespace(|| "Decompose opcode"), opcode, NUM_OPCODE_BITS)?;
-        let current_shake_opcode = opcode_bits_le[NUM_COEFF_INDEX_BITS as usize].clone();
-        let coeff_index_le = opcode_bits_le[..NUM_COEFF_INDEX_BITS as usize].to_vec();
-        // let sha256_opcode = opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
-        // let rsa_opcode_bits_le = opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
-
-        let coeff_index = AllocatedNum::alloc(cs.namespace(|| "RSA opcode"), || {
-            Ok(Scalar::from(self.opcode & COEFF_INDEX_MASK))
-        })?;
-
-        // check allocated RSA opcode matches with input opcode bits
-        check_decomposition(
-            cs.namespace(|| "check RSA opcode allocation"),
-            &coeff_index,
-            coeff_index_le,
-        )?;
-        // check_decomposition(
-        //     cs.namespace(|| "check RSA opcode allocation"),
-        //     &rsa_opcode,
-        //     rsa_opcode_bits_le,
-        // )?;
-
-        // check that next opcode fits in 10 bits
-        // let next_opcode_bits_le = num_to_bits(
-        //     cs.namespace(|| "Decompose next opcode"),
-        //     &next_opcode,
-        //     NUM_OPCODE_BITS,
-        // )?;
-        let next_sha256_opcode = next_opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
-        let next_rsa_opcode_bits_le = next_opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
-
-        let next_rsa_opcode = AllocatedNum::alloc(cs.namespace(|| "next RSA opcode"), || {
-            Ok(Scalar::from(self.next_opcode & RSA_OPCODE_MASK))
-        })?;
-
-        // check allocated next RSA opcode matches with input opcode bits
-        check_decomposition(
-            cs.namespace(|| "check next RSA opcode allocation"),
-            &next_rsa_opcode,
-            next_rsa_opcode_bits_le,
-        )?;
-
-        // Constraints related to the opcode inputs
-        cs.enforce(
-            || "next RSA opcode is always one more than current RSA opcode",
-            |lc| lc + next_rsa_opcode.get_variable(),
-            |lc| lc + CS::one(),
-            |lc| lc + CS::one() + rsa_opcode.get_variable(),
-        );
-
-        boolean_implies(
-            cs.namespace(|| "next SHA256 opcode is identical or one more"),
-            &sha256_opcode,
-            &next_sha256_opcode,
-        )?;
-
-        let is_sha256_opcode_last_sha256 = Boolean::and(
-            cs.namespace(|| "last SHA256 opcode flag"),
-            &sha256_opcode.not(), // OP_SHA256_ACTIVE = 0
-            &next_sha256_opcode,  // OP_SHA256_NOOP = 1
-        )?;
-        let is_sha256_opcode_active = sha256_opcode.not();
-
-        let is_rsa_opcode_first_rsa = alloc_num_equals_constant(
-            cs.namespace(|| "first RSA opcode flag"),
-            &rsa_opcode,
-            Scalar::from(OP_RSA_FIRST),
-        )?;
-        let is_opcode_last_rsa = alloc_num_equals_constant(
-            cs.namespace(|| "last RSA opcode flag"),
-            &rsa_opcode,
-            Scalar::from(OP_RSA_LAST),
-        )?;
-
-        // Check that the non-deterministic inputs hash to the expected value
-        let io_hash = &z[1];
-        let current_sha256_digest_scalar_values =
-            sha256_digest_to_scalars::<Scalar>(&self.current_sha256_digest_bytes);
-
-        let current_sha256_digest_scalars = current_sha256_digest_scalar_values
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
-                AllocatedNum::alloc(
-                    cs.namespace(|| format!("alloc SHA256 current digest scalar {i}")),
-                    || Ok(s),
-                )
-            })
-            .collect::<Result<Vec<_>, SynthesisError>>()?;
-        let initial_sha256_digest_scalars = sha256_initial_digest_scalars()
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
-                AllocatedNum::alloc(
-                    cs.namespace(|| format!("alloc SHA256 initial digest scalar {i}")),
-                    || Ok(s),
-                )
-            })
-            .collect::<Result<Vec<_>, SynthesisError>>()?;
-
-        // Overwrite current SHA256 digest scalars in the first step
-        let current_sha256_digest_scalars = conditionally_select_vec(
-            cs.namespace(|| "in first step use initial digest scalars"),
-            &initial_sha256_digest_scalars,
-            &current_sha256_digest_scalars,
-            &is_rsa_opcode_first_rsa,
-        )?;
-
-        let prev_nullifier =
-            AllocatedNum::alloc_infallible(cs.namespace(|| "alloc previous nullifier"), || {
-                self.prev_nullifier
-            });
-        let rsa_sig_power_allocatednum_limbs = self
-            .rsa_sig_power
-            .into_iter()
-            .enumerate()
-            .map(|(i, s)| {
-                AllocatedNum::alloc(
-                    cs.namespace(|| format!("alloc current RSA sig power scalar {i}")),
-                    || Ok(s),
-                )
-            })
-            .collect::<Result<Vec<_>, SynthesisError>>()?;
-        let rsa_signature_bigint = BigInt::from_bytes_be(Sign::Plus, &self.rsa_sig);
-        let rsa_signature = BigNat::<Scalar>::alloc_from_nat(
-            cs.namespace(|| "alloc RSA signature"),
-            || Ok(rsa_signature_bigint),
-            BIGNAT_LIMB_WIDTH,
-            BIGNAT_NUM_LIMBS,
-        )?;
-        let rsa_signature_allocatednum_limbs = bignat_to_allocatednum_limbs(
-            &mut cs.namespace(|| "alloc RSA sig limbs"),
-            &rsa_signature,
-        )?;
-
-        let aadhaar_io_hasher = PoseidonHasher::<Scalar>::new(3 + 2 * BIGNAT_NUM_LIMBS as u32);
-        let mut io_hash_preimage = current_sha256_digest_scalars.clone();
-        io_hash_preimage.push(prev_nullifier.clone());
-        io_hash_preimage.extend(rsa_signature_allocatednum_limbs.clone().into_iter());
-        io_hash_preimage.extend(rsa_sig_power_allocatednum_limbs.clone().into_iter());
-        let calc_io_hash = aadhaar_io_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "hash non-deterministic inputs"),
-            &io_hash_preimage,
-        )?;
-
-        let io_hash_preimage_correct = alloc_num_equals(
-            cs.namespace(|| "hash equality flag"),
-            io_hash,
-            &calc_io_hash,
-        )?;
-        boolean_implies(
-            cs.namespace(|| "hashes must be equal in all steps except the first step"),
-            &is_rsa_opcode_first_rsa.not(),
-            &io_hash_preimage_correct,
-        )?;
-
-        let first_sha256_msg_block_bits =
-            bytes_to_bits_le(&self.sha256_msg_block_pair[0..SHA256_BLOCK_LENGTH_BYTES]);
-        let second_sha256_msg_block_bits =
-            bytes_to_bits_le(&self.sha256_msg_block_pair[SHA256_BLOCK_LENGTH_BYTES..]);
-
-        let first_sha256_msg_block_booleans: Vec<Boolean> = first_sha256_msg_block_bits
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| {
-                Boolean::from(
-                    AllocatedBit::alloc(
-                        cs.namespace(|| format!("first SHA256 block input bit {i}")),
-                        Some(b),
-                    )
-                    .unwrap(),
-                )
-            })
-            .collect();
-        let second_sha256_msg_block_booleans: Vec<Boolean> = second_sha256_msg_block_bits
-            .into_iter()
-            .enumerate()
-            .map(|(i, b)| {
-                Boolean::from(
-                    AllocatedBit::alloc(
-                        cs.namespace(|| format!("second SHA256 block input bit {i}")),
-                        Some(b),
-                    )
-                    .unwrap(),
-                )
-            })
-            .collect();
-
-        let dob_byte_index =
-            AllocatedNum::alloc_infallible(cs.namespace(|| "alloc DoB byte index"), || {
-                Scalar::from(self.dob_byte_index as u64)
-            });
-
-        let mut two_sha256_msg_blocks = first_sha256_msg_block_booleans.clone();
-        two_sha256_msg_blocks.extend(second_sha256_msg_block_booleans.clone().into_iter());
-
-        let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
-            cs.namespace(|| "check if delimiter count before DoB is correct"),
-            &two_sha256_msg_blocks,
-            &dob_byte_index,
-        )?;
-        boolean_implies(
-            cs.namespace(|| "if first SHA256 step then delimiter count must be correct"),
-            &is_rsa_opcode_first_rsa,
-            &delimiter_count_correct,
-        )?;
-
-        let mut shift_bits =
-            dob_byte_index.to_bits_le(cs.namespace(|| "decompose DoB byte index"))?;
-        shift_bits.truncate(DOB_INDEX_BIT_LENGTH);
-
-        let shifted_msg_blocks = left_shift_bytes(
-            cs.namespace(|| "left shift to bring DoB bytes to the beginning"),
-            &two_sha256_msg_blocks,
-            &shift_bits,
-        )?;
-        let (day, month, year) = get_day_month_year_conditional(
-            cs.namespace(|| "get birth day, month, year"),
-            &shifted_msg_blocks[0..DATE_LENGTH_BYTES * 8],
-            &is_rsa_opcode_first_rsa,
-        )?;
-
-        let mut current_date_bits = z[1].to_bits_le(cs.namespace(|| "alloc current date bits"))?;
-        current_date_bits.truncate(DATE_LENGTH_BYTES * 8);
-
-        let (current_day, current_month, current_year) = get_day_month_year_conditional(
-            cs.namespace(|| "get current birth day, month, year"),
-            &current_date_bits,
-            &is_rsa_opcode_first_rsa,
-        )?;
-
-        let age = calculate_age_in_years(
-            cs.namespace(|| "calculate age"),
-            &day,
-            &month,
-            &year,
-            &current_day,
-            &current_month,
-            &current_year,
-            &is_rsa_opcode_first_rsa,
-        )?;
-        let age18 = alloc_constant(cs.namespace(|| "alloc 18"), Scalar::from(18u64))?;
-        let age_gte_18 = less_than_or_equal(
-            cs.namespace(|| "age <= 18"),
-            &age18,
-            &age,
-            19, // In the first step, age will occupy 7 bits but in later steps it can occupy 19 bits
-        )?;
-        boolean_implies(
-            cs.namespace(|| "if first SHA256 step then age must at least 18"),
-            &is_rsa_opcode_first_rsa,
-            &age_gte_18,
-        )?;
-
-        // Nullifier calculation
-        let mut two_sha256_msg_blocks_without_timestamp = vec![];
-        for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
-            two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
-        }
-        for _i in TIMESTAMP_START_BYTE_INDEX * 8..NAME_START_BYTE_INDEX * 8 {
-            two_sha256_msg_blocks_without_timestamp.push(Boolean::Constant(false));
-        }
-        for i in NAME_START_BYTE_INDEX * 8..2 * SHA256_BLOCK_LENGTH_BYTES * 8 {
-            two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
-        }
-
-        let mut msg_block_alloc_nums_without_timestamp: Vec<AllocatedNum<Scalar>> = vec![];
-        two_sha256_msg_blocks_without_timestamp
-            .chunks(Scalar::CAPACITY as usize)
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, c)| {
-                let tmp = pack_bits(
-                    cs.namespace(|| format!("packs bits without timestamp {i}")),
-                    c,
-                )
-                .unwrap();
-                msg_block_alloc_nums_without_timestamp.push(tmp);
-            });
-
-        let mut msg_block_alloc_nums: Vec<AllocatedNum<Scalar>> = vec![];
-        two_sha256_msg_blocks
-            .chunks(Scalar::CAPACITY as usize)
-            .into_iter()
-            .enumerate()
-            .for_each(|(i, c)| {
-                let tmp = pack_bits(cs.namespace(|| format!("packs bits with timestamp {i}")), c)
-                    .unwrap();
-                msg_block_alloc_nums.push(tmp);
-            });
-
-        let mut nullifier_msg_block_alloc_nums = conditionally_select_vec(
-            cs.namespace(|| "omit timestamp bits in first step"),
-            &msg_block_alloc_nums_without_timestamp,
-            &msg_block_alloc_nums,
-            &is_rsa_opcode_first_rsa,
-        )?;
-        nullifier_msg_block_alloc_nums.insert(0, prev_nullifier.clone());
-        let nullifier_hasher =
-            PoseidonHasher::<Scalar>::new(nullifier_msg_block_alloc_nums.len() as u32);
-        let new_nullifier = nullifier_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "hash msg block scalars to get nullifier"),
-            &nullifier_msg_block_alloc_nums,
-        )?;
-        let nullifier = conditionally_select(
-            cs.namespace(|| "choose between new and prev nullifiers"),
-            &new_nullifier,
-            &prev_nullifier,
-            &is_sha256_opcode_active,
-        )?;
-
-        // Compute SHA256 hash of the pair of message blocks
-        let first_sha256_io = super::sha256::compress(
-            &mut cs.namespace(|| "Compress first SHA256 message block"),
-            &first_sha256_msg_block_booleans,
-            &current_sha256_digest_scalars,
-        )?;
-        let second_sha256_io = super::sha256::compress(
-            &mut cs.namespace(|| "Compress second SHA256 message block"),
-            &second_sha256_msg_block_booleans,
-            &first_sha256_io.next_digest_scalars,
-        )?;
-
-        let num_sha256_msg_blocks_even = Boolean::from(
-            AllocatedBit::alloc(
-                cs.namespace(|| "alloc number of SHA256 msg blocks is even"),
-                Some(self.num_sha256_msg_blocks_even),
-            )
-            .unwrap(),
-        );
-
-        let is_opcode_not_last_sha256_or_num_sha256_msg_blocks_even = Boolean::or(
-            cs.namespace(|| "not last SHA256 opcode OR number of SHA256 blocks is even"),
-            &is_sha256_opcode_last_sha256.not(),
-            &num_sha256_msg_blocks_even,
-        )?;
-
-        let first_or_second_sha256_digest_scalars = conditionally_select_vec(
-            cs.namespace(|| "Choose between first and second SHA256 digests"),
-            &second_sha256_io.next_digest_scalars,
-            &first_sha256_io.next_digest_scalars,
-            &is_opcode_not_last_sha256_or_num_sha256_msg_blocks_even,
-        )?;
-        let first_or_second_sha256_digest_bits = conditionally_select_boolean_vec(
-            cs.namespace(|| "Choose between first and second SHA256 digest bits"),
-            &second_sha256_io.next_digest_bits,
-            &first_sha256_io.next_digest_bits,
-            &is_opcode_not_last_sha256_or_num_sha256_msg_blocks_even,
-        )?;
-        let next_sha256_digest_scalars = conditionally_select_vec(
-            cs.namespace(|| "Choose between current and next SHA256 digests"),
-            &first_or_second_sha256_digest_scalars,
-            &current_sha256_digest_scalars,
-            &is_sha256_opcode_active,
-        )?;
-        let next_sha256_digest_bits = conditionally_select_boolean_vec(
-            cs.namespace(|| "Choose between current and next SHA256 digest bits"),
-            &first_or_second_sha256_digest_bits,
-            &first_sha256_io.current_digest_bits,
-            &is_sha256_opcode_active,
-        )?;
-
-        let rsa_sig_power_num_limbs = rsa_sig_power_allocatednum_limbs
-            .iter()
-            .map(|al| Num {
-                num: LinearCombination::from_variable(al.get_variable()),
-                value: al.get_value(),
-            })
-            .collect::<Vec<_>>();
-
-        let rsa_sig_power =
-            BigNat::<Scalar>::from_limbs(rsa_sig_power_num_limbs, BIGNAT_LIMB_WIDTH);
-
-        let is_rsa_opcode_first_rsa_bit = Bit {
-            bit: is_rsa_opcode_first_rsa.lc(CS::one(), Scalar::ONE),
-            value: is_rsa_opcode_first_rsa.get_value(),
-        };
-
-        // Overwriting the rsa_sig_power allocated from auxiliary input with the signature in the first step
-        let rsa_sig_power = BigNat::<Scalar>::mux(
-            cs.namespace(|| "select between sig power and sig"),
-            &is_rsa_opcode_first_rsa_bit,
-            &rsa_sig_power,
-            &rsa_signature,
-        )?;
-
-        let modulus_bigint = BigInt::from_bytes_be(Sign::Plus, &RSA_MODULUS_HEX_BYTES);
-        let modulus_limb_values =
-            nat_to_limbs::<Scalar>(&modulus_bigint, BIGNAT_LIMB_WIDTH, BIGNAT_NUM_LIMBS)?;
-
-        let modulus = BigNat::<Scalar>::alloc_from_nat(
-            cs.namespace(|| "alloc RSA modulus"),
-            || Ok(modulus_bigint),
-            BIGNAT_LIMB_WIDTH,
-            BIGNAT_NUM_LIMBS,
-        )?;
-        let modulus_limbs = modulus.as_limbs::<CS>();
-
-        for i in 0..BIGNAT_NUM_LIMBS {
-            cs.enforce(
-                || format!("check equality of allocated limb {i} with constant limb"),
-                |lc| lc + &modulus_limbs[i].num - (modulus_limb_values[i], CS::one()),
-                |lc| lc + CS::one(),
-                |lc| lc,
-            )
-        }
-
-        let (_, rsa_sig_power_squared) = rsa_sig_power.mult_mod(
-            cs.namespace(|| format!("square the signature power")),
-            &rsa_sig_power,
-            &modulus,
-        )?;
-
-        let (_, rsa_sig_power_times_sig) = rsa_sig_power.mult_mod(
-            cs.namespace(|| format!("multiply squared signature power with signature")),
-            &rsa_signature,
-            &modulus,
-        )?;
-
-        let is_opcode_last_rsa_bit = Bit {
-            bit: is_opcode_last_rsa.lc(CS::one(), Scalar::ONE),
-            value: is_opcode_last_rsa.get_value(),
-        };
-
-        let next_rsa_sig_power = BigNat::<Scalar>::mux(
-            cs.namespace(|| "select between square and square times sig"),
-            &is_opcode_last_rsa_bit,
-            &rsa_sig_power_squared,
-            &rsa_sig_power_times_sig,
-        )?;
-
-        let encoded_msg_bitvec = emsa_pkcs1v15_encode::<Scalar, CS>(&next_sha256_digest_bits);
-        // Note that the bits are reversed to as recompose expects bits in little-endian order
-        let encoded_msg_bignat =
-            BigNat::<Scalar>::recompose(&encoded_msg_bitvec.reversed(), BIGNAT_LIMB_WIDTH);
-
-        let is_signature_valid = encoded_msg_bignat.is_equal(
-            cs.namespace(|| "Check that powered signature equals encoded message"),
-            &next_rsa_sig_power,
-        )?;
-
-        // If opcode is last RSA, then signature must be valid
-        boolean_implies(
-            cs.namespace(|| "last RSA opcode => RSA signature valid"),
-            &is_opcode_last_rsa,
-            &is_signature_valid,
-        )?;
-
-        let next_rsa_sig_power_allocatednum_limbs = bignat_to_allocatednum_limbs(
-            &mut cs.namespace(|| "allocated limbs of next RSA sig power"),
-            &next_rsa_sig_power,
-        )?;
-
-        let mut io_allocatednums = next_sha256_digest_scalars.clone();
-        io_allocatednums.push(nullifier.clone());
-        io_allocatednums.extend(rsa_signature_allocatednum_limbs.into_iter());
-        io_allocatednums.extend(next_rsa_sig_power_allocatednum_limbs.into_iter());
-
-        let new_io_hash = aadhaar_io_hasher
-            .hash_in_circuit(&mut cs.namespace(|| "hash IO"), &io_allocatednums)?;
-
-        // TODO need to create the value of next_opcode as it is not an auxiliary input.
-        let last_z_out = vec![next_opcode.clone(), nullifier];
-        let z_out = conditionally_select_vec(
-            cs.namespace(|| "Choose between outputs of last opcode and others"),
-            &last_z_out,
-            &[next_opcode, new_io_hash],
-            &is_opcode_last_rsa,
-        )?;
-
-        Ok(z_out)
-    }
-}
+// impl<Scalar> AadhaarAgeProofCircuit<Scalar>
+// where
+//     Scalar: PrimeFieldBits,
+// {
+//     fn update_nullifier(prev_nullifier: Scalar, current_msg_block: &[u8]) -> Scalar {
+//         assert_eq!(current_msg_block.len(), SHAKE256_BLOCK_LENGTH_BYTES);
+
+//         let msg_blocks_bits = bytes_to_bits_le(current_msg_block);
+//         let mut msg_blocks_scalars = compute_multipacking::<Scalar>(&msg_blocks_bits);
+//         msg_blocks_scalars.insert(0, prev_nullifier);
+//         let nullifier_hasher = PoseidonHasher::new(msg_blocks_scalars.len() as u32);
+//         let next_nullifier = nullifier_hasher.hash(&msg_blocks_scalars);
+//         next_nullifier
+//     }
+
+//     pub fn calc_initial_primary_circuit_input(current_date_bytes: &[u8]) -> Vec<Scalar> {
+//         let initial_opcode =
+//             Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
+
+//         let current_date_bits = bytes_to_bits(current_date_bytes);
+//         let current_date_scalars = compute_multipacking::<Scalar>(&current_date_bits);
+//         assert_eq!(current_date_scalars.len(), 1);
+//         let current_date_scalar = current_date_scalars[0];
+
+//         // The last scalar corresponds to the current date
+//         vec![initial_opcode, current_date_scalar]
+//     }
+
+//     pub fn new_state_sequence(
+//         aadhaar_qr_data: &AadhaarQRData,
+//     ) -> Vec<AadhaarAgeProofCircuit<Scalar>> {
+//         let mut shake256_msg_blocks = shake256_msg_blocks(aadhaar_qr_data.signed_data.clone());
+
+//         let mut aadhaar_steps = vec![];
+
+//         // Get the public key to verify the signature
+//         let h: Polynomial = (&aadhaar_qr_data.public_key).into();
+
+//         let mut coeff_index: u64 = 0;
+//         let mut next_shake_opcode: u64 = OP_SHAKE256_ACTIVE;
+
+//         // initialize sponge states
+//         let mut ctx_absorb = [false; SHAKE256_DIGEST_LENGTH_BITS];
+//         let mut ctx_squeeze = [false; SHAKE256_DIGEST_LENGTH_BITS];
+//         let mut ctx_inject = [false; SHAKE256_DIGEST_LENGTH_BITS];
+
+//         let mut l2_norm_sum: u16 = 0;
+
+//         // s2 = Decompress(falcon_sig(aadhaar_qr_data.signed_data))
+//         let s2: Polynomial = (&aadhaar_qr_data.falcon_signature).into();
+
+//         let mut prev_nullifier = Scalar::ZERO;
+
+//         let first_opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST;
+//         let first_next_shake256_opcode = if shake256_msg_blocks.len() == 1 { 1 } else { 0 };
+
+//         let first_shake256_msg_block: [u8; SHAKE256_BLOCK_LENGTH_BYTES] =
+//             [shake256_msg_blocks[0]].concat().try_into().unwrap();
+//         for m_i in shake256_msg_blocks.iter() {
+//             let m_i_bits = bytes_to_bits_le(m_i);
+//             ctx_inject = library_step_sponge(ctx_inject.to_vec(), Some(m_i_bits), 1088, false);
+//         }
+//         ctx_squeeze = ctx_inject;
+
+//         // First step
+//         aadhaar_steps.push(Self {
+//             opcode: first_opcode,
+//             next_shake_opcode: first_next_shake256_opcode,
+//             shake256_msg_block: first_shake256_msg_block,
+//             dob_byte_index: aadhaar_qr_data.dob_byte_index,
+//             l2_norm_sum: 0,
+//             ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
+//             ctx_squeeze: ctx_squeeze,
+//             ctx_inject: ctx_inject,
+//             s2: s2,
+//             prev_nullifier: prev_nullifier,
+//         });
+
+//         // Square the signature
+//         // rsa_sig_power_bigint = rsa_sig_power_bigint.modpow(&BigInt::from(2u64), &modulus_bigint);
+
+//         let msg_blocks_without_timestamp: [u8; SHAKE256_BLOCK_LENGTH_BYTES] = [
+//             &first_shake256_msg_block[0..TIMESTAMP_START_BYTE_INDEX],
+//             &[0u8; NAME_START_BYTE_INDEX - TIMESTAMP_START_BYTE_INDEX],
+//             &first_shake256_msg_block[NAME_START_BYTE_INDEX..],
+//         ]
+//         .concat()
+//         .try_into()
+//         .unwrap();
+//         prev_nullifier = Self::update_nullifier(prev_nullifier, &msg_blocks_without_timestamp);
+
+//         // t = max(pad101(m_r)/136,9)
+//         let mut t = 9;
+//         if shake256_msg_blocks.len() > t {
+//             t = shake256_msg_blocks.len()
+//         }
+
+//         let mut sum_aggregated: u16 = 0;
+//         (coeff_index, sum_aggregated, ctx_squeeze) =
+//             library_hashtocoeffs(ctx_squeeze, MODULUS, coeff_index, s2, true, h);
+//         l2_norm_sum = l2_norm_sum + sum_aggregated;
+//         ctx_absorb = library_step_sponge(ctx_absorb.to_vec(), None, 1088, true);
+
+//         // Append public input and auxiliary input for next t-1 steps
+//         for i in 1..=t - 1 {
+//             let mut shake256_msg_block = shake256_msg_blocks[i];
+//             let mut opcode;
+
+//             if i < shake256_msg_blocks.len() {
+//                 shake256_msg_block = shake256_msg_blocks[i];
+//                 opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + (coeff_index);
+//                 next_shake_opcode = OP_SHAKE256_ACTIVE;
+//             }
+//             if i == shake256_msg_blocks.len() {
+//                 shake256_msg_block = [0u8; SHAKE256_BLOCK_LENGTH_BYTES];
+//                 opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + (coeff_index);
+//                 next_shake_opcode = OP_SHAKE256_NO_OP;
+//             } else {
+//                 shake256_msg_block = [0u8; SHAKE256_BLOCK_LENGTH_BYTES];
+//                 opcode = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + (coeff_index);
+//             }
+
+//             let step = Self {
+//                 opcode: opcode,
+//                 next_shake_opcode: next_shake_opcode,
+//                 shake256_msg_block: shake256_msg_block,
+//                 dob_byte_index: aadhaar_qr_data.dob_byte_index,
+//                 l2_norm_sum: l2_norm_sum,
+//                 ctx_absorb: ctx_absorb,
+//                 ctx_squeeze: ctx_squeeze,
+//                 ctx_inject: ctx_inject,
+//                 s2: s2,
+//                 prev_nullifier: prev_nullifier,
+//             };
+
+//             aadhaar_steps.push(step);
+
+//             // TODO coeff_index = hashtocoeffs(); or just update_coeff_index();
+//             // TODO update l2_norm_sum (update_l2_norm_coeff_index())
+//             // TODO update ctx_squeeze and ctx_absorb
+//             let flag_coeff: bool = coeff_index < 512;
+//             (coeff_index, sum_aggregated, ctx_squeeze) =
+//                 library_hashtocoeffs(ctx_squeeze, MODULUS, coeff_index, s2, flag_coeff, h);
+//             l2_norm_sum = l2_norm_sum + sum_aggregated;
+//             ctx_absorb = library_step_sponge(ctx_absorb.to_vec(), None, 1088, true);
+//         }
+
+//         aadhaar_steps
+//     }
+// }
+
+// impl<Scalar> StepCircuit<Scalar> for AadhaarAgeProofCircuit<Scalar>
+// where
+//     Scalar: PrimeFieldBits,
+// {
+//     fn arity(&self) -> usize {
+//         2
+//     }
+
+//     fn synthesize<CS: ConstraintSystem<Scalar>>(
+//         &self,
+//         cs: &mut CS,
+//         z: &[AllocatedNum<Scalar>],
+//     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
+//         let opcode = &z[0];
+//         // let next_opcode = AllocatedNum::alloc(cs.namespace(|| "next opcode"), || {
+//         //     Ok(Scalar::from(self.next_opcode))
+//         // })?;
+//         // check that opcode fits in 10 bits
+//         let opcode_bits_le =
+//             num_to_bits(cs.namespace(|| "Decompose opcode"), opcode, NUM_OPCODE_BITS)?;
+//         let current_shake_opcode = opcode_bits_le[NUM_COEFF_INDEX_BITS as usize].clone();
+//         let coeff_index_le = opcode_bits_le[..NUM_COEFF_INDEX_BITS as usize].to_vec();
+//         // let sha256_opcode = opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
+//         // let rsa_opcode_bits_le = opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
+
+//         let coeff_index = AllocatedNum::alloc(cs.namespace(|| "RSA opcode"), || {
+//             Ok(Scalar::from(self.opcode & COEFF_INDEX_MASK))
+//         })?;
+
+//         // check allocated RSA opcode matches with input opcode bits
+//         check_decomposition(
+//             cs.namespace(|| "check RSA opcode allocation"),
+//             &coeff_index,
+//             coeff_index_le,
+//         )?;
+//         // check_decomposition(
+//         //     cs.namespace(|| "check RSA opcode allocation"),
+//         //     &rsa_opcode,
+//         //     rsa_opcode_bits_le,
+//         // )?;
+
+//         // check that next opcode fits in 10 bits
+//         // let next_opcode_bits_le = num_to_bits(
+//         //     cs.namespace(|| "Decompose next opcode"),
+//         //     &next_opcode,
+//         //     NUM_OPCODE_BITS,
+//         // )?;
+//         let next_sha256_opcode = next_opcode_bits_le[NUM_RSA_OPCODE_BITS as usize].clone();
+//         let next_rsa_opcode_bits_le = next_opcode_bits_le[..NUM_RSA_OPCODE_BITS as usize].to_vec();
+
+//         let next_rsa_opcode = AllocatedNum::alloc(cs.namespace(|| "next RSA opcode"), || {
+//             Ok(Scalar::from(self.next_opcode & RSA_OPCODE_MASK))
+//         })?;
+
+//         // check allocated next RSA opcode matches with input opcode bits
+//         check_decomposition(
+//             cs.namespace(|| "check next RSA opcode allocation"),
+//             &next_rsa_opcode,
+//             next_rsa_opcode_bits_le,
+//         )?;
+
+//         // Constraints related to the opcode inputs
+//         cs.enforce(
+//             || "next RSA opcode is always one more than current RSA opcode",
+//             |lc| lc + next_rsa_opcode.get_variable(),
+//             |lc| lc + CS::one(),
+//             |lc| lc + CS::one() + rsa_opcode.get_variable(),
+//         );
+
+//         boolean_implies(
+//             cs.namespace(|| "next SHA256 opcode is identical or one more"),
+//             &sha256_opcode,
+//             &next_sha256_opcode,
+//         )?;
+
+//         let is_sha256_opcode_last_sha256 = Boolean::and(
+//             cs.namespace(|| "last SHA256 opcode flag"),
+//             &sha256_opcode.not(), // OP_SHA256_ACTIVE = 0
+//             &next_sha256_opcode,  // OP_SHA256_NOOP = 1
+//         )?;
+//         let is_sha256_opcode_active = sha256_opcode.not();
+
+//         let is_rsa_opcode_first_rsa = alloc_num_equals_constant(
+//             cs.namespace(|| "first RSA opcode flag"),
+//             &rsa_opcode,
+//             Scalar::from(OP_RSA_FIRST),
+//         )?;
+//         let is_opcode_last_rsa = alloc_num_equals_constant(
+//             cs.namespace(|| "last RSA opcode flag"),
+//             &rsa_opcode,
+//             Scalar::from(OP_RSA_LAST),
+//         )?;
+
+//         // Check that the non-deterministic inputs hash to the expected value
+//         let io_hash = &z[1];
+//         let current_sha256_digest_scalar_values =
+//             sha256_digest_to_scalars::<Scalar>(&self.current_sha256_digest_bytes);
+
+//         let current_sha256_digest_scalars = current_sha256_digest_scalar_values
+//             .into_iter()
+//             .enumerate()
+//             .map(|(i, s)| {
+//                 AllocatedNum::alloc(
+//                     cs.namespace(|| format!("alloc SHA256 current digest scalar {i}")),
+//                     || Ok(s),
+//                 )
+//             })
+//             .collect::<Result<Vec<_>, SynthesisError>>()?;
+//         let initial_sha256_digest_scalars = sha256_initial_digest_scalars()
+//             .into_iter()
+//             .enumerate()
+//             .map(|(i, s)| {
+//                 AllocatedNum::alloc(
+//                     cs.namespace(|| format!("alloc SHA256 initial digest scalar {i}")),
+//                     || Ok(s),
+//                 )
+//             })
+//             .collect::<Result<Vec<_>, SynthesisError>>()?;
+
+//         // Overwrite current SHA256 digest scalars in the first step
+//         let current_sha256_digest_scalars = conditionally_select_vec(
+//             cs.namespace(|| "in first step use initial digest scalars"),
+//             &initial_sha256_digest_scalars,
+//             &current_sha256_digest_scalars,
+//             &is_rsa_opcode_first_rsa,
+//         )?;
+
+//         let prev_nullifier =
+//             AllocatedNum::alloc_infallible(cs.namespace(|| "alloc previous nullifier"), || {
+//                 self.prev_nullifier
+//             });
+//         let rsa_sig_power_allocatednum_limbs = self
+//             .rsa_sig_power
+//             .into_iter()
+//             .enumerate()
+//             .map(|(i, s)| {
+//                 AllocatedNum::alloc(
+//                     cs.namespace(|| format!("alloc current RSA sig power scalar {i}")),
+//                     || Ok(s),
+//                 )
+//             })
+//             .collect::<Result<Vec<_>, SynthesisError>>()?;
+//         let rsa_signature_bigint = BigInt::from_bytes_be(Sign::Plus, &self.rsa_sig);
+//         let rsa_signature = BigNat::<Scalar>::alloc_from_nat(
+//             cs.namespace(|| "alloc RSA signature"),
+//             || Ok(rsa_signature_bigint),
+//             BIGNAT_LIMB_WIDTH,
+//             BIGNAT_NUM_LIMBS,
+//         )?;
+//         let rsa_signature_allocatednum_limbs = bignat_to_allocatednum_limbs(
+//             &mut cs.namespace(|| "alloc RSA sig limbs"),
+//             &rsa_signature,
+//         )?;
+
+//         let aadhaar_io_hasher = PoseidonHasher::<Scalar>::new(3 + 2 * BIGNAT_NUM_LIMBS as u32);
+//         let mut io_hash_preimage = current_sha256_digest_scalars.clone();
+//         io_hash_preimage.push(prev_nullifier.clone());
+//         io_hash_preimage.extend(rsa_signature_allocatednum_limbs.clone().into_iter());
+//         io_hash_preimage.extend(rsa_sig_power_allocatednum_limbs.clone().into_iter());
+//         let calc_io_hash = aadhaar_io_hasher.hash_in_circuit(
+//             &mut cs.namespace(|| "hash non-deterministic inputs"),
+//             &io_hash_preimage,
+//         )?;
+
+//         let io_hash_preimage_correct = alloc_num_equals(
+//             cs.namespace(|| "hash equality flag"),
+//             io_hash,
+//             &calc_io_hash,
+//         )?;
+//         boolean_implies(
+//             cs.namespace(|| "hashes must be equal in all steps except the first step"),
+//             &is_rsa_opcode_first_rsa.not(),
+//             &io_hash_preimage_correct,
+//         )?;
+
+//         let first_sha256_msg_block_bits =
+//             bytes_to_bits_le(&self.sha256_msg_block_pair[0..SHA256_BLOCK_LENGTH_BYTES]);
+//         let second_sha256_msg_block_bits =
+//             bytes_to_bits_le(&self.sha256_msg_block_pair[SHA256_BLOCK_LENGTH_BYTES..]);
+
+//         let first_sha256_msg_block_booleans: Vec<Boolean> = first_sha256_msg_block_bits
+//             .into_iter()
+//             .enumerate()
+//             .map(|(i, b)| {
+//                 Boolean::from(
+//                     AllocatedBit::alloc(
+//                         cs.namespace(|| format!("first SHA256 block input bit {i}")),
+//                         Some(b),
+//                     )
+//                     .unwrap(),
+//                 )
+//             })
+//             .collect();
+//         let second_sha256_msg_block_booleans: Vec<Boolean> = second_sha256_msg_block_bits
+//             .into_iter()
+//             .enumerate()
+//             .map(|(i, b)| {
+//                 Boolean::from(
+//                     AllocatedBit::alloc(
+//                         cs.namespace(|| format!("second SHA256 block input bit {i}")),
+//                         Some(b),
+//                     )
+//                     .unwrap(),
+//                 )
+//             })
+//             .collect();
+
+//         let dob_byte_index =
+//             AllocatedNum::alloc_infallible(cs.namespace(|| "alloc DoB byte index"), || {
+//                 Scalar::from(self.dob_byte_index as u64)
+//             });
+
+//         let mut two_sha256_msg_blocks = first_sha256_msg_block_booleans.clone();
+//         two_sha256_msg_blocks.extend(second_sha256_msg_block_booleans.clone().into_iter());
+
+//         let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
+//             cs.namespace(|| "check if delimiter count before DoB is correct"),
+//             &two_sha256_msg_blocks,
+//             &dob_byte_index,
+//         )?;
+//         boolean_implies(
+//             cs.namespace(|| "if first SHA256 step then delimiter count must be correct"),
+//             &is_rsa_opcode_first_rsa,
+//             &delimiter_count_correct,
+//         )?;
+
+//         let mut shift_bits =
+//             dob_byte_index.to_bits_le(cs.namespace(|| "decompose DoB byte index"))?;
+//         shift_bits.truncate(DOB_INDEX_BIT_LENGTH);
+
+//         let shifted_msg_blocks = left_shift_bytes(
+//             cs.namespace(|| "left shift to bring DoB bytes to the beginning"),
+//             &two_sha256_msg_blocks,
+//             &shift_bits,
+//         )?;
+//         let (day, month, year) = get_day_month_year_conditional(
+//             cs.namespace(|| "get birth day, month, year"),
+//             &shifted_msg_blocks[0..DATE_LENGTH_BYTES * 8],
+//             &is_rsa_opcode_first_rsa,
+//         )?;
+
+//         let mut current_date_bits = z[1].to_bits_le(cs.namespace(|| "alloc current date bits"))?;
+//         current_date_bits.truncate(DATE_LENGTH_BYTES * 8);
+
+//         let (current_day, current_month, current_year) = get_day_month_year_conditional(
+//             cs.namespace(|| "get current birth day, month, year"),
+//             &current_date_bits,
+//             &is_rsa_opcode_first_rsa,
+//         )?;
+
+//         let age = calculate_age_in_years(
+//             cs.namespace(|| "calculate age"),
+//             &day,
+//             &month,
+//             &year,
+//             &current_day,
+//             &current_month,
+//             &current_year,
+//             &is_rsa_opcode_first_rsa,
+//         )?;
+//         let age18 = alloc_constant(cs.namespace(|| "alloc 18"), Scalar::from(18u64))?;
+//         let age_gte_18 = less_than_or_equal(
+//             cs.namespace(|| "age <= 18"),
+//             &age18,
+//             &age,
+//             19, // In the first step, age will occupy 7 bits but in later steps it can occupy 19 bits
+//         )?;
+//         boolean_implies(
+//             cs.namespace(|| "if first SHA256 step then age must at least 18"),
+//             &is_rsa_opcode_first_rsa,
+//             &age_gte_18,
+//         )?;
+
+//         // Nullifier calculation
+//         let mut two_sha256_msg_blocks_without_timestamp = vec![];
+//         for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
+//             two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
+//         }
+//         for _i in TIMESTAMP_START_BYTE_INDEX * 8..NAME_START_BYTE_INDEX * 8 {
+//             two_sha256_msg_blocks_without_timestamp.push(Boolean::Constant(false));
+//         }
+//         for i in NAME_START_BYTE_INDEX * 8..2 * SHA256_BLOCK_LENGTH_BYTES * 8 {
+//             two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
+//         }
+
+//         let mut msg_block_alloc_nums_without_timestamp: Vec<AllocatedNum<Scalar>> = vec![];
+//         two_sha256_msg_blocks_without_timestamp
+//             .chunks(Scalar::CAPACITY as usize)
+//             .into_iter()
+//             .enumerate()
+//             .for_each(|(i, c)| {
+//                 let tmp = pack_bits(
+//                     cs.namespace(|| format!("packs bits without timestamp {i}")),
+//                     c,
+//                 )
+//                 .unwrap();
+//                 msg_block_alloc_nums_without_timestamp.push(tmp);
+//             });
+
+//         let mut msg_block_alloc_nums: Vec<AllocatedNum<Scalar>> = vec![];
+//         two_sha256_msg_blocks
+//             .chunks(Scalar::CAPACITY as usize)
+//             .into_iter()
+//             .enumerate()
+//             .for_each(|(i, c)| {
+//                 let tmp = pack_bits(cs.namespace(|| format!("packs bits with timestamp {i}")), c)
+//                     .unwrap();
+//                 msg_block_alloc_nums.push(tmp);
+//             });
+
+//         let mut nullifier_msg_block_alloc_nums = conditionally_select_vec(
+//             cs.namespace(|| "omit timestamp bits in first step"),
+//             &msg_block_alloc_nums_without_timestamp,
+//             &msg_block_alloc_nums,
+//             &is_rsa_opcode_first_rsa,
+//         )?;
+//         nullifier_msg_block_alloc_nums.insert(0, prev_nullifier.clone());
+//         let nullifier_hasher =
+//             PoseidonHasher::<Scalar>::new(nullifier_msg_block_alloc_nums.len() as u32);
+//         let new_nullifier = nullifier_hasher.hash_in_circuit(
+//             &mut cs.namespace(|| "hash msg block scalars to get nullifier"),
+//             &nullifier_msg_block_alloc_nums,
+//         )?;
+//         let nullifier = conditionally_select(
+//             cs.namespace(|| "choose between new and prev nullifiers"),
+//             &new_nullifier,
+//             &prev_nullifier,
+//             &is_sha256_opcode_active,
+//         )?;
+
+//         // Compute SHA256 hash of the pair of message blocks
+//         let first_sha256_io = super::sha256::compress(
+//             &mut cs.namespace(|| "Compress first SHA256 message block"),
+//             &first_sha256_msg_block_booleans,
+//             &current_sha256_digest_scalars,
+//         )?;
+//         let second_sha256_io = super::sha256::compress(
+//             &mut cs.namespace(|| "Compress second SHA256 message block"),
+//             &second_sha256_msg_block_booleans,
+//             &first_sha256_io.next_digest_scalars,
+//         )?;
+
+//         let num_sha256_msg_blocks_even = Boolean::from(
+//             AllocatedBit::alloc(
+//                 cs.namespace(|| "alloc number of SHA256 msg blocks is even"),
+//                 Some(self.num_sha256_msg_blocks_even),
+//             )
+//             .unwrap(),
+//         );
+
+//         let is_opcode_not_last_sha256_or_num_sha256_msg_blocks_even = Boolean::or(
+//             cs.namespace(|| "not last SHA256 opcode OR number of SHA256 blocks is even"),
+//             &is_sha256_opcode_last_sha256.not(),
+//             &num_sha256_msg_blocks_even,
+//         )?;
+
+//         let first_or_second_sha256_digest_scalars = conditionally_select_vec(
+//             cs.namespace(|| "Choose between first and second SHA256 digests"),
+//             &second_sha256_io.next_digest_scalars,
+//             &first_sha256_io.next_digest_scalars,
+//             &is_opcode_not_last_sha256_or_num_sha256_msg_blocks_even,
+//         )?;
+//         let first_or_second_sha256_digest_bits = conditionally_select_boolean_vec(
+//             cs.namespace(|| "Choose between first and second SHA256 digest bits"),
+//             &second_sha256_io.next_digest_bits,
+//             &first_sha256_io.next_digest_bits,
+//             &is_opcode_not_last_sha256_or_num_sha256_msg_blocks_even,
+//         )?;
+//         let next_sha256_digest_scalars = conditionally_select_vec(
+//             cs.namespace(|| "Choose between current and next SHA256 digests"),
+//             &first_or_second_sha256_digest_scalars,
+//             &current_sha256_digest_scalars,
+//             &is_sha256_opcode_active,
+//         )?;
+//         let next_sha256_digest_bits = conditionally_select_boolean_vec(
+//             cs.namespace(|| "Choose between current and next SHA256 digest bits"),
+//             &first_or_second_sha256_digest_bits,
+//             &first_sha256_io.current_digest_bits,
+//             &is_sha256_opcode_active,
+//         )?;
+
+//         let rsa_sig_power_num_limbs = rsa_sig_power_allocatednum_limbs
+//             .iter()
+//             .map(|al| Num {
+//                 num: LinearCombination::from_variable(al.get_variable()),
+//                 value: al.get_value(),
+//             })
+//             .collect::<Vec<_>>();
+
+//         let rsa_sig_power =
+//             BigNat::<Scalar>::from_limbs(rsa_sig_power_num_limbs, BIGNAT_LIMB_WIDTH);
+
+//         let is_rsa_opcode_first_rsa_bit = Bit {
+//             bit: is_rsa_opcode_first_rsa.lc(CS::one(), Scalar::ONE),
+//             value: is_rsa_opcode_first_rsa.get_value(),
+//         };
+
+//         // Overwriting the rsa_sig_power allocated from auxiliary input with the signature in the first step
+//         let rsa_sig_power = BigNat::<Scalar>::mux(
+//             cs.namespace(|| "select between sig power and sig"),
+//             &is_rsa_opcode_first_rsa_bit,
+//             &rsa_sig_power,
+//             &rsa_signature,
+//         )?;
+
+//         let modulus_bigint = BigInt::from_bytes_be(Sign::Plus, &RSA_MODULUS_HEX_BYTES);
+//         let modulus_limb_values =
+//             nat_to_limbs::<Scalar>(&modulus_bigint, BIGNAT_LIMB_WIDTH, BIGNAT_NUM_LIMBS)?;
+
+//         let modulus = BigNat::<Scalar>::alloc_from_nat(
+//             cs.namespace(|| "alloc RSA modulus"),
+//             || Ok(modulus_bigint),
+//             BIGNAT_LIMB_WIDTH,
+//             BIGNAT_NUM_LIMBS,
+//         )?;
+//         let modulus_limbs = modulus.as_limbs::<CS>();
+
+//         for i in 0..BIGNAT_NUM_LIMBS {
+//             cs.enforce(
+//                 || format!("check equality of allocated limb {i} with constant limb"),
+//                 |lc| lc + &modulus_limbs[i].num - (modulus_limb_values[i], CS::one()),
+//                 |lc| lc + CS::one(),
+//                 |lc| lc,
+//             )
+//         }
+
+//         let (_, rsa_sig_power_squared) = rsa_sig_power.mult_mod(
+//             cs.namespace(|| format!("square the signature power")),
+//             &rsa_sig_power,
+//             &modulus,
+//         )?;
+
+//         let (_, rsa_sig_power_times_sig) = rsa_sig_power.mult_mod(
+//             cs.namespace(|| format!("multiply squared signature power with signature")),
+//             &rsa_signature,
+//             &modulus,
+//         )?;
+
+//         let is_opcode_last_rsa_bit = Bit {
+//             bit: is_opcode_last_rsa.lc(CS::one(), Scalar::ONE),
+//             value: is_opcode_last_rsa.get_value(),
+//         };
+
+//         let next_rsa_sig_power = BigNat::<Scalar>::mux(
+//             cs.namespace(|| "select between square and square times sig"),
+//             &is_opcode_last_rsa_bit,
+//             &rsa_sig_power_squared,
+//             &rsa_sig_power_times_sig,
+//         )?;
+
+//         let encoded_msg_bitvec = emsa_pkcs1v15_encode::<Scalar, CS>(&next_sha256_digest_bits);
+//         // Note that the bits are reversed to as recompose expects bits in little-endian order
+//         let encoded_msg_bignat =
+//             BigNat::<Scalar>::recompose(&encoded_msg_bitvec.reversed(), BIGNAT_LIMB_WIDTH);
+
+//         let is_signature_valid = encoded_msg_bignat.is_equal(
+//             cs.namespace(|| "Check that powered signature equals encoded message"),
+//             &next_rsa_sig_power,
+//         )?;
+
+//         // If opcode is last RSA, then signature must be valid
+//         boolean_implies(
+//             cs.namespace(|| "last RSA opcode => RSA signature valid"),
+//             &is_opcode_last_rsa,
+//             &is_signature_valid,
+//         )?;
+
+//         let next_rsa_sig_power_allocatednum_limbs = bignat_to_allocatednum_limbs(
+//             &mut cs.namespace(|| "allocated limbs of next RSA sig power"),
+//             &next_rsa_sig_power,
+//         )?;
+
+//         let mut io_allocatednums = next_sha256_digest_scalars.clone();
+//         io_allocatednums.push(nullifier.clone());
+//         io_allocatednums.extend(rsa_signature_allocatednum_limbs.into_iter());
+//         io_allocatednums.extend(next_rsa_sig_power_allocatednum_limbs.into_iter());
+
+//         let new_io_hash = aadhaar_io_hasher
+//             .hash_in_circuit(&mut cs.namespace(|| "hash IO"), &io_allocatednums)?;
+
+//         // TODO need to create the value of next_opcode as it is not an auxiliary input.
+//         let last_z_out = vec![next_opcode.clone(), nullifier];
+//         let z_out = conditionally_select_vec(
+//             cs.namespace(|| "Choose between outputs of last opcode and others"),
+//             &last_z_out,
+//             &[next_opcode, new_io_hash],
+//             &is_opcode_last_rsa,
+//         )?;
+
+//         Ok(z_out)
+//     }
+// }
