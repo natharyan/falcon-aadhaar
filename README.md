@@ -1,8 +1,8 @@
 Privacy-preserving age proofs using incrementally verifiable computation for Aadhaar QR codes retrofitted with Falcon signatures.
 ------
-<a href="https://falcon-sign.info/falcon.pdf" target="_blank">Falcon signature</a> is a lattice based signature, and a winner of [NIST PQC competition](https://csrc.nist.gov/Projects/post-quantum-cryptography/selected-algorithms-2022). It has desirable properties such as compact signatures and relatively simple verification.
+<a href="https://falcon-sign.info/falcon.pdf" target="_blank">Falcon signature</a> is a lattice-based signature, and a winner of [NIST PQC competition](https://csrc.nist.gov/Projects/post-quantum-cryptography/selected-algorithms-2022). It has desirable properties such as compact signatures and relatively simple verification.
 
-<a href="https://falcon-sign.info/falcon.pdf" target="_blank">Bellpepper</a> is a Rust library that we use to generate R1CS circuits which are used to create zero-knowledge proofs that attest to a prover knowing a valid Aadhaar QR code with a Falcon signature.
+<a href="https://falcon-sign.info/falcon.pdf" target="_blank">Bellpepper</a> is a Rust library that we use to generate R1CS circuits, which are used to create zero-knowledge proofs that attest to a prover knowing a valid Aadhaar QR code with a Falcon signature.
 
 We design and implement Falcon signature verification as an incremental computation and combine it with Nova Aadhaar's implementation in Bellpepper for creating privacy-preserving age proofs.
 
@@ -18,4 +18,4 @@ We design and implement Falcon signature verification as an incremental computat
   sourced from <a href="https://github.com/avras/nova-aadhaar-qr" target="_blank">avras/nova-aadhaar-qr</a>.
 
 ## In progress
-- The HashToCoeffs function is being optimized to get lesser constraints than normal NTT based falcon signature verification.
+- The HashToCoeffs function is being optimized to get fewer constraints than normal NTT based falcon signature verification with the same input/witness initialization.
