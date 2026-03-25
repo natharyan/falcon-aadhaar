@@ -7,10 +7,15 @@ use bellpepper_core::ConstraintSystem;
 use bellpepper_core::SynthesisError;
 use bellpepper_core::boolean::Boolean;
 use proptest::bits;
+use keccak::f1600;
+use sha3::{
+    Digest, Keccak256, Sha3_256, Shake128, Shake256,
+    digest::{ExtendableOutput, Update, XofReader},
+};
 
 use crate::gadgets::bellpepper_uint64::UInt64;
 use crate::utils::{
-    arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le, library_step_sponge,
+    arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le,
     vec_bool_to_arr_u64,
 };
 use ff::PrimeField;
@@ -35,6 +40,37 @@ const ROUND_CONSTANTS: [u64; 24] = [
 const ROTR: [usize; 25] = [
     0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
 ];
+
+pub fn library_shake_256(input: &[u8], d: usize) -> Vec<u8> {
+    let mut hasher = Shake256::default();
+    hasher.update(input);
+    let mut reader = hasher.finalize_xof();
+    let mut result = vec![0u8; d];
+    XofReader::read(&mut reader, &mut result);
+    result
+}
+
+/// One step of the absorption (flag = false) or squeezing phase (flag = true)
+pub(crate) fn library_step_sponge(
+    mut state: Vec<bool>,
+    m_i: Option<Vec<bool>>,
+    r: usize,
+    flag: bool,
+) -> [bool; 1600] {
+    // absorption step
+    if !flag {
+        if let Some(m_i_bits) = m_i {
+            for i in 0..r {
+                state[i] ^= m_i_bits[i];
+            }
+        } else {
+            assert!(false, "Absorption step requires input message block m_i");
+        }
+    }
+    let mut input_arr_u64 = vec_bool_to_arr_u64(&state);
+    f1600(&mut input_arr_u64);
+    arr_u64_to_vec_bool(&input_arr_u64)
+}
 
 fn xor_2<E, CS>(mut cs: CS, a: &UInt64, b: &UInt64) -> Result<UInt64, SynthesisError>
 where

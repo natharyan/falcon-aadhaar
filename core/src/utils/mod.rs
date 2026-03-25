@@ -1,15 +1,16 @@
-// use crate::circuit::NUM_COEFF_INDEX_BITS;
+use crate::circuit::NUM_COEFF_INDEX_BITS;
 use crate::shake256::SHAKE256_BLOCK_LENGTH_BYTES;
-use bellpepper::gadgets::{multipack::bytes_to_bits,boolean::AllocatedBit};
+use bellpepper::gadgets::{multipack::bytes_to_bits,boolean::AllocatedBit,num::Num};
 use bellpepper_core::boolean::{Boolean};
+
 use bellpepper_core::num::AllocatedNum;
 use bellpepper_core::{ConstraintSystem, SynthesisError, LinearCombination};
 use blstrs::Scalar;
 use clap::error;
-use falcon_rust::{MODULUS, N, Polynomial, PublicKey};
+use falcon_rust::{MODULUS, SIG_L2_BOUND, N, Polynomial, PublicKey};
 use ff::{PrimeField, PrimeFieldBits};
 use keccak::f1600;
-use nova_aadhaar_qr::util::{check_decomposition, alloc_constant, conditionally_select, num_to_bits, conditionally_select_vec};
+use nova_aadhaar_qr::util::{check_decomposition, alloc_num_equals, conditionally_select, num_to_bits};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -84,28 +85,6 @@ pub(crate) fn arr_u64_to_vec_bool(input: &[u64; 25]) -> [bool; 1600] {
         })
         .collect();
     vec.try_into().expect("Expected exactly 1600 bits")
-}
-
-/// One step of the absorption (flag = false) or squeezing phase (flag = true)
-pub(crate) fn library_step_sponge(
-    mut state: Vec<bool>,
-    m_i: Option<Vec<bool>>,
-    r: usize,
-    flag: bool,
-) -> [bool; 1600] {
-    // absorption step
-    if !flag {
-        if let Some(m_i_bits) = m_i {
-            for i in 0..r {
-                state[i] ^= m_i_bits[i];
-            }
-        } else {
-            assert!(false, "Absorption step requires input message block m_i");
-        }
-    }
-    let mut input_arr_u64 = vec_bool_to_arr_u64(&state);
-    f1600(&mut input_arr_u64);
-    arr_u64_to_vec_bool(&input_arr_u64)
 }
 
 // referenced from https://github.com/zhenfeizhang/falcon.rs/blob/master/falcon-r1cs/src/gadgets/arithmetics.rs#L105
@@ -245,6 +224,8 @@ where
     Ok(())
 }
 
+
+
 // Referenced from https://github.com/zhenfeizhang/falcon.rs/blob/master/falcon-r1cs/src/gadgets/arithmetics.rs#L157
 /// Generate the variable c = a * b mod 12289;
 /// with a guarantee that the inputs a and b satisfies:
@@ -313,36 +294,54 @@ where
 /// idx = b0 + 2*b1 + 2^2*b2 + ... + 2^(n-1)*bn to select the correct element in O(n), here n = 512
 /// Interprets vec as a binary tree and uses the bits of idx to traverse up the tree
 /// bit bi works as a selector at layer n-1
-// pub(crate) fn select_from_vector_512<Scalar, CS>(
-//     mut cs: CS,
-//     vec: &[AllocatedNum<Scalar>],
-//     idx: &AllocatedNum<Scalar>
-// ) -> Result<AllocatedNum<Scalar>, SynthesisError>
-// where 
-//     Scalar: PrimeField + ff::PrimeFieldBits,
-//     CS: ConstraintSystem<Scalar>,
-// {
-//     assert_eq!(vec.len(), 512, "select_from_vector_mux_512 only supports vectors of length 512");
+pub(crate) fn select_from_vector_512<Scalar, CS>(
+    mut cs: CS,
+    vec: &[AllocatedNum<Scalar>],
+    idx: &AllocatedNum<Scalar>
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
+where 
+    Scalar: PrimeField + ff::PrimeFieldBits,
+    CS: ConstraintSystem<Scalar>,
+{
+    // assert_eq!(vec.len(), 512, "select_from_vector_mux_512 only supports vectors of length 512");
 
-//     let idx_bits = num_to_bits(cs.namespace(||" coeff_index bits"), idx, NUM_COEFF_INDEX_BITS as usize)?;
+    let idx_bits = num_to_bits(cs.namespace(||" coeff_index bits"), idx, NUM_COEFF_INDEX_BITS as usize)?;
 
-//     let mut layer = vec.to_vec();
+    let mut layer = vec.to_vec();
     
-//     // binary mux tree with 9 levels
-//     for (_, bit) in idx_bits.iter().enumerate() {
-//         let mut next = Vec::with_capacity(layer.len() / 2);
-//         for j in 0..(layer.len() / 2) {
-//             let selected = conditionally_select(cs.namespace(|| "mux level"), &layer[2*j + 1],
-//                 &layer[2*j],
-//                 bit)?;
-//             next.push(selected);
-//         }
-//         // eliminate half of the elements in the current layer in each iteration
-//         layer = next;
-//     }
-//     assert!(layer.len() == 1, "After mux tree traversal, only one element should remain");
-//     Ok(layer[0].clone())
-// }
+    // binary mux tree with 9 levels
+    for (_, bit) in idx_bits.iter().enumerate() {
+        let mut next = Vec::with_capacity(layer.len() / 2);
+        for j in 0..(layer.len() / 2) {
+            let selected = conditionally_select(cs.namespace(|| "mux level"), &layer[2*j + 1],
+                &layer[2*j],
+                bit)?;
+            next.push(selected);
+        }
+        // eliminate half of the elements in the current layer in each iteration
+        layer = next;
+    }
+    assert!(layer.len() == 1, "After mux tree traversal, only one element should remain");
+    Ok(layer[0].clone())
+}
+
+pub(crate) fn select_from_vec_linear<Scalar, CS>(
+    mut cs: CS,
+    input: &[AllocatedNum<Scalar>],
+    idx: &AllocatedNum<Scalar>
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
+where
+    Scalar: PrimeField + ff::PrimeFieldBits,
+    CS: ConstraintSystem<Scalar>,
+{
+    let mut selected = AllocatedNum::alloc(cs.namespace(|| "selected"), || Ok(Scalar::ZERO))?;
+    for (i, elem) in input.iter().enumerate() {
+        let idx_i = AllocatedNum::alloc(cs.namespace(|| format!("idx_{}", i)), || Ok(Scalar::from(i as u64)))?;
+        let is_selected = alloc_num_equals(cs.namespace(|| format!("is idx {i} selected")), &idx, &idx_i)?;
+        selected = conditionally_select(cs.namespace(|| format!("select elem {}", i)), elem, &selected, &is_selected)?;
+    }
+    Ok(selected)
+}
 
 // Referenced from https://github.com/zhenfeizhang/falcon.rs/blob/master/falcon-r1cs/src/gadgets/arithmetics.rs#L34
 /// Generate the variable c = <a \cdot b> mod 12289;
@@ -418,4 +417,134 @@ where
     enforce_less_than_q(cs, &c_var)?;
 
     Ok(c_var)
+}
+
+pub(crate) fn num_to_alloc<Scalar, CS>(
+    mut cs: CS,
+    num: &Num<Scalar>,
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
+where
+    Scalar: PrimeField + PrimeFieldBits,
+    CS: ConstraintSystem<Scalar>,
+{
+    let num_var = AllocatedNum::alloc(
+        cs.namespace(|| "num_to_alloc"),
+        || num.get_value().ok_or(SynthesisError::AssignmentMissing),
+    )?;
+    cs.enforce(
+        || "enforce num to allocnum",
+        |lc| lc + &num.lc(Scalar::ONE),
+        |lc| lc + CS::one(),
+        |lc| lc + num_var.get_variable(),
+    );
+    Ok(num_var)
+}
+
+pub(crate) fn kary_or<Scalar, CS>(
+    mut cs: CS,
+    bits: &[Boolean],
+) -> Result<Boolean, SynthesisError>
+where
+    Scalar: PrimeField,
+    CS: ConstraintSystem<Scalar>,
+{
+    assert!(!bits.is_empty(), "kary_or requires at least one input");
+    let mut acc = bits[0].clone();
+    for (i, bit) in bits[1..].iter().enumerate() {
+        acc = Boolean::or(cs.namespace(|| format!("kary_or_{}", i)), &acc, bit)?;
+    }
+    Ok(acc)
+}
+
+pub(crate) fn kary_and<Scalar, CS>(
+   mut cs: CS,
+    bits: &[Boolean],
+) -> Result<Boolean, SynthesisError>
+where
+    Scalar: PrimeField,
+    CS: ConstraintSystem<Scalar>,
+{
+    assert!(!bits.is_empty(), "kary_and requires at least one input");
+    let mut acc = bits[0].clone();
+    for (i, bit) in bits[1..].iter().enumerate() {
+        acc = Boolean::and(cs.namespace(|| format!("kary_and_{}", i)), &acc, bit)?;
+    }
+    Ok(acc)
+}
+
+/// Constraint that the witness of a is smaller than 34034726
+/// Cost: 47 constraints.
+/// (This improves the range proof of 1264 constraints as in Arkworks.)    
+pub(crate) fn enforce_less_than_norm_bound<CS, Scalar>(
+    mut cs: CS,
+    a: &AllocatedNum<Scalar>,
+) -> Result<Boolean, SynthesisError> 
+where 
+CS: ConstraintSystem<Scalar>,
+Scalar: PrimeField + PrimeFieldBits + PartialOrd,
+{
+    // the norm bound is 0b10000001110101010000100110 which is 26 bits, i.e.,
+    // 2^25 + 2^18 + 2^17 + 2^16 + 2^14 + 2^ 12 + 2^10 + 2^5 + 2^2 + 2
+    let a_val = a.get_value().unwrap_or(Scalar::ONE);
+
+    // suppressing this check so that unit test can test
+    // bad paths
+    #[cfg(not(test))]
+    if a_val >= Scalar::from(SIG_L2_BOUND) {
+        panic!("Invalid input to enforce_less_than_norm_bound");
+    }
+
+
+    let a_bits = bytes_to_bits_le(a_val.to_repr().as_ref());
+    // a_bit_vars is the least 26 bits of a
+    // (we only care for the first 26 bits of a_bits)
+    let a_bit_vars = a_bits
+        .iter()
+        .take(26)
+        .enumerate()
+        .map(|(i, &bit)| {
+            Ok(Boolean::from(AllocatedBit::alloc(
+                cs.namespace(|| format!("bit {}", i)),
+                Some(bit),
+            )?))
+        })
+        .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
+
+    // ensure that a_bits are the bit decomposition of a
+    check_decomposition(cs.namespace(|| "check_decomposition enforce_less_than_norm_bound"), a, a_bit_vars.clone())?;
+
+    let kary_or_19_24 = kary_or(cs.namespace(|| "kary_or_19_24"), &a_bit_vars[19..25])?.not();
+    let kary_and_16_18 = kary_and(cs.namespace(|| "kary_and_16_18"), &a_bit_vars[16..19])?.not();
+    let kary_or_6_9 = kary_or(cs.namespace(|| "kary_or_6_9"), &a_bit_vars[6..10])?.not();
+    let kary_or_3_4 = kary_or(cs.namespace(|| "kary_or_3_4"), &a_bit_vars[3..5])?.not();
+    let kary_and_1_2 = kary_and(cs.namespace(|| "kary_and_1_2"), &a_bit_vars[1..3])?.not();
+    // argue that a < 0b10000001110101010000100110  via the following:
+    // - a[25] == 0 or
+    // - a[25] == 1 and a[19..24] == 0 and
+    //    - either one of a[16..18] == 0
+    //    - or a[16..18] == 1 and a[15] == 0 and
+    //      - either a[14] == 0
+    //      - or a[14] == 1 and a[13] == 0 and
+    //          - either a[12] == 0
+    //          - or a[12] == 1 and a[11] == 0 and
+    //              - either a[10] == 0
+    //              - or a[10] == 1 and a[6-9] == 0 and
+    //                  - either a[5] == 0
+    //                  - or a[5] == 1 and a[3] = a [4] == 0 and
+    //                      - one of a[1] or a[2] == 0
+    let and_3_4 = Boolean::and(cs.namespace(|| "and_3_4"), &kary_or_3_4, &kary_and_1_2)?; // - or a[5] == 1 and a[3] = a [4] == 0 and one of a[1] or a[2] == 0
+    let or_5 = Boolean::or(cs.namespace(|| "or_5"), &a_bit_vars[5].not(), &and_3_4)?; // either a[5] == 0
+    let and_6_9 = Boolean::and(cs.namespace(|| "and_6_9"), &kary_or_6_9, &or_5)?; // - or a[10] == 1 and a[6-9] == 0 and
+    let or_10 = Boolean::or(cs.namespace(|| "or_10"), &a_bit_vars[10].not(), &and_6_9)?; // - either a[10] == 0
+    let and_11 = Boolean::and(cs.namespace(|| "and_11"), &a_bit_vars[11].not(), &or_10)?; // - or a[12] == 1 and a[11] == 0 and
+    let or_12 = Boolean::or(cs.namespace(|| "or_12"), &a_bit_vars[12].not(), &and_11)?; // - either a[12] == 0
+    let and_13 = Boolean::and(cs.namespace(|| "and_13"), &a_bit_vars[13].not(), &or_12)?; // - or a[14] == 1 and a[13] == 0 and
+    let or_14 = Boolean::or(cs.namespace(|| "or_14"), &a_bit_vars[14].not(), &and_13)?; // - either a[14] == 0
+    let and_15 = Boolean::and(cs.namespace(|| "and_15"), &a_bit_vars[15].not(), &or_14)?; // - or a[16..18] == 1 and a[15] == 0 and
+    let or_16_18 = Boolean::or(cs.namespace(|| "or_16_18"), &kary_and_16_18, &and_15)?; // - either one of a[16..18] == 0
+    let and_19_24 = Boolean::and(cs.namespace(|| "and_19_24"), &kary_or_19_24, &or_16_18)?; // - a[25] == 1 and a[19..24] == 0 and
+    let res = Boolean::or(cs.namespace(|| "or_25"), &a_bit_vars[25].not(), &and_19_24)?; // - a[25] == 0 or
+    // Boolean::enforce_equal(cs.namespace(|| "enforce less than norm bound"), &res, &Boolean::Constant(true))?;
+
+    Ok(res)
 }

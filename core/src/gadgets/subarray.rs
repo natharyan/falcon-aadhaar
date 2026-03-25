@@ -1,5 +1,6 @@
 use core::alloc;
 
+use crate::utils::{select_from_vector_512, select_from_vec_linear};
 use nova_aadhaar_qr::util::{alloc_constant, conditionally_select, less_than, num_to_bits, alloc_num_equals_constant};
 use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError, boolean::Boolean, num::AllocatedNum};
 use bellpepper::gadgets::Assignment;
@@ -90,101 +91,59 @@ where
 }
 
 // 18,836 constraints for input.len() == 512
-/// output[i] = next subarray element if bit_array[i] == 1, 0 otherwise.
 /// prefix[i] = number of 1s before index i
+/// output[i] = input[prefix[i]]
 /// eg. bit_array = [1,0,1,0,1,1,1] then prefix = [0,1,1,2,2,3,4]
-pub fn pad_vec_from_bit_array<CS, Scalar>(cs: &mut CS, input: Vec<AllocatedNum<Scalar>>, bit_array: Vec<Boolean>) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
+pub fn pad_vec_from_bit_array<CS, Scalar>(
+    cs: &mut CS,
+    input: Vec<AllocatedNum<Scalar>>,
+    bit_array: Vec<Boolean>,
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
 where
     Scalar: PrimeFieldBits,
-    CS: ConstraintSystem<Scalar>
+    CS: ConstraintSystem<Scalar>,
 {
+    assert_eq!(input.len(), 68);
     assert_eq!(bit_array.len(), 68);
 
     let mut prefix: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
-    prefix.push(alloc_constant(cs.namespace(|| "prefix0"), Scalar::ZERO)?);
-
+    prefix.push(alloc_constant(cs.namespace(|| "prefix0"),Scalar::ZERO,)?,);
     for i in 1..68 {
-        let next = AllocatedNum::alloc(cs.namespace(|| format!("prefix_{i}")), || {
-            let prev = *prefix[i - 1].get_value().get()?;
-            let bit = if bit_array[i - 1].get_value().unwrap_or(false) {
-                Scalar::ONE
-            } else {
-                Scalar::ZERO
-            };
-            Ok(prev + bit)
-        })?;
+        let next = AllocatedNum::alloc(
+            cs.namespace(|| format!("prefix_{i}")),
+            || {
+                let prev = *prefix[i - 1].get_value().get()?;
+
+                let bit = if bit_array[i - 1]
+                    .get_value()
+                    .unwrap_or(false)
+                {
+                    Scalar::ONE
+                } else {
+                    Scalar::ZERO
+                };
+
+                Ok(prev + bit)
+            },
+        )?;
 
         cs.enforce(
             || format!("prefix update {i}"),
             |lc| lc + next.get_variable(),
             |lc| lc + CS::one(),
-            |lc| lc + prefix[i - 1].get_variable() 
-                                            + &bit_array[i - 1].lc(CS::one(), Scalar::ONE),
+            |lc| {
+                lc + prefix[i - 1].get_variable()
+                    + &bit_array[i - 1].lc(CS::one(), Scalar::ONE)
+            },
         );
 
         prefix.push(next);
     }
 
-    let mut output: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
+    let mut output: Vec<AllocatedNum<Scalar>> =Vec::with_capacity(68);
     for i in 0..68 {
-        let mut selected_lc = LinearCombination::<Scalar>::zero();
-        let mut terms: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
-
-        for j in 0..68 {
-            // true if j == prefix[i]
-            let eq = alloc_num_equals_constant(
-                cs.namespace(|| format!("eq_{i}_{j}")),
-                &prefix[i],
-                Scalar::from(j as u64),
-            )?;
-            // term = input[j] if eq == true else 0
-            let term = AllocatedNum::alloc(cs.namespace(|| format!("term_{i}_{j}")), || {
-                if eq.get_value().unwrap_or(false) {
-                    Ok(*input[j].get_value().get()?)
-                } else {
-                    Ok(Scalar::ZERO)
-                }
-            })?;
-
-            cs.enforce(
-                || format!("term constraint {i}_{j}"),
-                |lc| lc + input[j].get_variable(),
-                |_| eq.lc(CS::one(), Scalar::ONE),
-                |lc| lc + term.get_variable(),
-            );
-
-            selected_lc = selected_lc + term.get_variable();
-            terms.push(term);
-        }
-
-        // selected = sum_k term_k
-        let selected = AllocatedNum::alloc(cs.namespace(|| format!("selected_{i}")), || {
-            let mut acc = Scalar::ZERO;
-            for t in &terms {
-                acc += t.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-            }
-            Ok(acc)
-        })?;
-
-        cs.enforce(
-            || format!("enforce selected sum {i}"),
-            |lc| lc + CS::one(),
-            |_| selected_lc,
-            |lc| lc + selected.get_variable(),
-        );
-
-        // mask with bit_array
-        // out_i = input[prefix[i]]*bit_array[i]
-        let zero_const = alloc_constant(cs.namespace(|| format!("zero_out_{i}")),Scalar::ZERO)?;
-        let out = conditionally_select(
-            cs.namespace(|| format!("mask_output_{i}")),
-            &selected,
-            &zero_const,
-            &bit_array[i],
-        )?;
-
-        output.push(out);
-
+        let selected = select_from_vec_linear(cs.namespace(|| format!("select_from_vector_512_{i} pad_vec_from_bit_array")), &input, &prefix[i])?;
+        output.push(selected);
     }
 
     Ok(output)
@@ -370,6 +329,8 @@ mod tests {
             bit_vars.push(Boolean::constant(b));
         }
 
+        let before = cs.num_constraints();
+
         let output = pad_vec_from_bit_array(
             &mut cs.namespace(|| "pad_vec"),
             input_vars.clone(),
@@ -377,25 +338,30 @@ mod tests {
         )
         .unwrap();
 
+        let after = cs.num_constraints();
+
         let mut expected = vec![Fr::ZERO; 68];
-        let mut ptr = 0usize;
+
+        let mut prefix = 0usize;
 
         for i in 0..68 {
+            expected[i] = input_vals[prefix];
+
             if bit_vals[i] {
-                expected[i] = input_vals[ptr];
-                ptr += 1;
-            } else {
-                expected[i] = Fr::ZERO;
+                prefix += 1;
             }
         }
 
         for i in 0..68 {
-            assert_eq!(output[i].get_value().unwrap(), expected[i], "Mismatch at index {i}");
+            assert_eq!(
+                output[i].get_value().unwrap(),
+                expected[i],
+                "Mismatch at index {i}"
+            );
         }
 
-        println!("number of constraints for pad_vec_bit_array: {}", cs.num_constraints());
+        println!("number of constraints for pad_vec_bit_array: {}",after - before);
 
         assert!(cs.is_satisfied());
-
     }
 }

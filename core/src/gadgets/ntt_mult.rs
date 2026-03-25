@@ -11,7 +11,10 @@ use nova_snark::traits::commitment::ScalarMul;
 use std::fs::File;
 use std::io::Write;
 use nova_aadhaar_qr::{util::alloc_constant};
-use crate::utils::mod_q;
+use crate::utils::{mod_q, enforce_less_than_q};
+use ff::Field;
+use num_traits::ToPrimitive;
+use num_bigint::BigUint;
 
 /// NTT forward table where the i-th element is g^rev(i) where
 /// - g = 7 is a primitive root
@@ -323,9 +326,9 @@ where
 // given the coefficients are constrained mod_q in the main circuit, the maximum value of any coefficient of the NTT polynomial is < (2^9 * q^10)*(2^9 * q^10) = (2^{LOG_N} * q^{LOG_N+1})^2
 /// Multiply ntt(input) with another NTT polynomial p2 which has coefficients as Scalar.
 /// creates 0 constraints
-pub(crate) fn ntt_mult_num_poly<Scalar, CS>
+pub(crate) fn ntt_mult_const_p2<Scalar, CS>
 (
-    cs: CS,
+    mut cs: CS,
     p1: Vec<Num<Scalar>>,
     p2: NTTPolynomial
 )-> Result<Vec<Num<Scalar>>, SynthesisError>
@@ -346,13 +349,16 @@ where
         output.push(coeff);
     }
 
-    Ok(output)
+    let output_reduced = num_reduce_mod_q(cs.namespace(|| "prod_ntt_reduced"), &output);
+    let output_nums: Vec<Num<Scalar>> = output_reduced.iter().cloned().map(Num::from).collect();
+
+    Ok(output_nums)
 }
 
 /// input is NTT form of polynomial as an array of Num<Scalar>
 /// output the inverse NTT of the input
 /// creates 0 constraints
-pub(crate) fn inv_ntt_deferred_circuit_num<Scalar, CS>(
+pub(crate) fn inv_ntt_deferred_circuit<Scalar, CS>(
     cs: CS,
     input: Vec<Num<Scalar>>
 ) -> Result<Vec<Num<Scalar>>, SynthesisError>
@@ -427,10 +433,69 @@ CS: ConstraintSystem<Scalar>
     Ok(output)
 }
 
+pub(crate) fn num_reduce_mod_q<CS, Scalar>(
+    mut cs: CS,
+    nums: &[Num<Scalar>],
+) -> Vec<AllocatedNum<Scalar>>
+where
+    CS: ConstraintSystem<Scalar>,
+    Scalar: PrimeField + PrimeFieldBits,
+{
+    let q = MODULUS as u64;
+    // BigUint required for BigUint/BigUint division
+    let modulus_int = BigUint::from(q);
+    let q_scalar = Scalar::from(q);
+
+    nums.iter()
+        .enumerate()
+        .map(|(i, num)| {
+            let reduced = AllocatedNum::alloc(
+                cs.namespace(|| format!("reduced_{}", i)),
+                || {
+                    let val = num.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                    let val_int = BigUint::from_bytes_le(val.to_repr().as_ref());
+                    let b_int = &val_int % &modulus_int;
+                    Ok(Scalar::from(b_int.to_u64().unwrap()))
+                },
+            )?;
+
+            let k = AllocatedNum::alloc(
+                cs.namespace(|| format!("quotient_{}", i)),
+                || {
+                    let val = num.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                    let val_int = BigUint::from_bytes_le(val.to_repr().as_ref());
+                    let k_int = &val_int / &modulus_int;
+                    let k_bytes = k_int.to_bytes_le();
+                    let mut repr = <Scalar as PrimeField>::Repr::default();
+                    let repr_bytes = repr.as_mut();
+                    let len = k_bytes.len().min(repr_bytes.len());
+                    repr_bytes[..len].copy_from_slice(&k_bytes[..len]);
+                    Ok(Scalar::from_repr(repr).unwrap_or(Scalar::ZERO))
+                },
+            )?;
+
+            // enforce num.lc = k * q + reduced
+            cs.enforce(
+                || format!("num_mod_q_{}", i),
+                |lc| lc + k.get_variable(),
+                |lc| lc + (q_scalar, CS::one()),
+                |lc| lc + &num.lc(Scalar::ONE) - reduced.get_variable(),
+            );
+
+            enforce_less_than_q(
+                cs.namespace(|| format!("range_check_{}", i)),
+                &reduced,
+            )?;
+
+            Ok(reduced)
+        })
+        .collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()
+        .expect("num_reduce_mod_q failed")
+}
 
 #[cfg(test)]
 mod tests {
-    use super::{inv_ntt, ntt, inv_ntt_deferred_circuit_num, ntt_deferred_circuit, ntt_mult_num_poly};
+    use super::{inv_ntt, ntt, inv_ntt_deferred_circuit, ntt_deferred_circuit, ntt_mult_const_p2, num_reduce_mod_q};
     use bellpepper_core::{ConstraintSystem, num::AllocatedNum};
     use bellpepper::gadgets::num::Num;
     use bellpepper_core::{test_cs::TestConstraintSystem, SynthesisError};
@@ -440,83 +505,6 @@ mod tests {
     use ff::PrimeField;
     use pasta_curves::Fp;
     use ff::Field;
-
-    fn num_reduce_mod_q<CS: ConstraintSystem<Fp>>(
-        cs: &mut CS,
-        nums: &[Num<Fp>],
-        label: &str,
-    ) -> Vec<AllocatedNum<Fp>> {
-        let modulus = MODULUS as u64;
-        let base = (1u128 << 64) % modulus as u128;
-
-        let collapsed: Vec<AllocatedNum<Fp>> = nums
-            .iter()
-            .enumerate()
-            .map(|(i, coeff)| {
-                AllocatedNum::alloc(cs.namespace(|| format!("{}_collapsed_{}", label, i)), || {
-                    let value = coeff.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-                    let repr = value.to_repr();
-                    let bytes = repr.as_ref();
-                    let mut limbs = [0u64; 4];
-                    for j in 0..4 {
-                        let mut limb = [0u8; 8];
-                        limb.copy_from_slice(&bytes[j * 8..(j + 1) * 8]);
-                        limbs[j] = u64::from_le_bytes(limb);
-                    }
-                    let mut acc = 0u128;
-                    for j in (0..4).rev() {
-                        acc = (acc * base + limbs[j] as u128) % modulus as u128;
-                    }
-                    Ok(Fp::from(acc as u64))
-                })
-            })
-            .collect::<Result<_, _>>()
-            .unwrap();
-
-        // Allocate quotient k such that: input = k * q + collapsed
-        // i.e. enforce: input - collapsed = k * q
-        let q_scalar = Fp::from(MODULUS as u64);
-        let constrained: Vec<AllocatedNum<Fp>> = collapsed
-            .iter()
-            .enumerate()
-            .map(|(i, collapsed_val)| {
-                // Witness the quotient k
-                let k = AllocatedNum::alloc(cs.namespace(|| format!("{}_quotient_{}", label, i)), || {
-                    let input_val = nums[i].get_value().ok_or(SynthesisError::AssignmentMissing)?;
-                    let collapsed_val = collapsed_val.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-                    // k = (input - collapsed) / q
-                    let diff = input_val - collapsed_val;
-                    let k_val = diff * q_scalar.invert().unwrap();
-                    Ok(k_val)
-                }).unwrap();
-
-                // Enforce: input == k * q + collapsed
-                // i.e. input - collapsed - k * q == 0
-                // as a constraint: (1) * (k) * (q) = input - collapsed
-                cs.enforce(
-                    || format!("{}_range_check_{}", label, i),
-                    |lc| lc + k.get_variable(),
-                    |lc| lc + (q_scalar, CS::one()),
-                    |lc| lc + &nums[i].lc(Fp::from(1u64)) - collapsed_val.get_variable(),
-                );
-
-                Ok(collapsed_val.clone())
-            })
-            .collect::<Result<_, SynthesisError>>()
-            .unwrap();
-
-        constrained
-            .iter()
-            .enumerate()
-            .map(|(i, alloc)| {
-                mod_q(
-                    cs.namespace(|| format!("{}_mod_q_{}", label, i)),
-                    alloc,
-                )
-                .expect("mod_q failed")
-            })
-            .collect()
-    }
 
     /// function to convert 
     fn extract_coeffs(reduced: &[AllocatedNum<Fp>]) -> [u16; N] {
@@ -569,12 +557,9 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        let a_ntt_num = {
-            let mut ns = cs.namespace(|| "ntt_deferred_circuit_test");
-            ntt_deferred_circuit(&mut ns, &a_alloc).unwrap()
-        };
+        let a_ntt_num = ntt_deferred_circuit(cs.namespace(|| "ntt_deferred_circuit_test"), &a_alloc).unwrap();
 
-        let reduced = num_reduce_mod_q(&mut cs, &a_ntt_num, "ntt");
+        let reduced = num_reduce_mod_q(cs.namespace(|| "reduced ntt_circuit"), &a_ntt_num);
 
         assert!(cs.is_satisfied(), "Constraint system is not satisfied!");
 
@@ -606,20 +591,14 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        let a_ntt_num = {
-            let mut ns = cs.namespace(|| "ntt_deferred_for_inv");
-            ntt_deferred_circuit(&mut ns, &a_alloc).unwrap()
-        };
+        let a_ntt_num = ntt_deferred_circuit(cs.namespace(|| "ntt_deferred_for_inv"), &a_alloc).unwrap();
 
-        let a_ntt_reduced = num_reduce_mod_q(&mut cs, &a_ntt_num, "ntt_for_inv");
+        let a_ntt_reduced = num_reduce_mod_q(cs.namespace(|| "a_ntt_reduced"), &a_ntt_num);
         let a_ntt_reduced_nums: Vec<Num<Fp>> = a_ntt_reduced.iter().cloned().map(Num::from).collect();
 
-        let prod_num = {
-            let mut ns = cs.namespace(|| "inv_ntt_circuit_test");
-            inv_ntt_deferred_circuit_num(&mut ns, a_ntt_reduced_nums).unwrap()
-        };
+        let prod_num = inv_ntt_deferred_circuit(cs.namespace(|| "inv_ntt_circuit_test"), a_ntt_reduced_nums).unwrap();
 
-        let reduced = num_reduce_mod_q(&mut cs, &prod_num, "invntt");
+        let reduced = num_reduce_mod_q(cs.namespace(|| "reduced inv_ntt_circuit"), &prod_num);
 
         assert!(cs.is_satisfied(), "Constraint system is not satisfied!");
 
@@ -652,28 +631,16 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        let a_ntt_num = {
-            let mut ns = cs.namespace(|| "ntt_deferred_circuit");
-            ntt_deferred_circuit(&mut ns, &a_alloc).unwrap()
-        };
+        let a_ntt_num = ntt_deferred_circuit(cs.namespace(|| "ntt_deferred_circuit"), &a_alloc).unwrap();
 
         let b_ntt = ntt(&b_poly);
 
-        let prod_ntt_num = {
-            let mut ns = cs.namespace(|| "ntt_mult_num_poly");
-            ntt_mult_num_poly(&mut ns, a_ntt_num, b_ntt).unwrap()
-        };
+        let prod_ntt_num = ntt_mult_const_p2(cs.namespace(|| "ntt_mult_const_p2"), a_ntt_num, b_ntt).unwrap();
 
-        let prod_ntt_reduced = num_reduce_mod_q(&mut cs, &prod_ntt_num, "prod_ntt");
-        let prod_ntt_reduced_nums: Vec<Num<Fp>> = prod_ntt_reduced.iter().cloned().map(Num::from).collect();
+        let prod_num = inv_ntt_deferred_circuit(cs.namespace(|| "inv_ntt_deferred_circuit"), prod_ntt_num).unwrap();
 
-        let prod_num = {
-            let mut ns = cs.namespace(|| "inv_ntt_deferred_circuit_num");
-            inv_ntt_deferred_circuit_num(&mut ns, prod_ntt_reduced_nums).unwrap()
-        };
-
-        let reduced: Vec<AllocatedNum<Fp>> = num_reduce_mod_q(&mut cs, &prod_num, "invntt");
-
+        let _ = num_reduce_mod_q(cs.namespace(|| "reduced ntt_mult 64"), &prod_num[0..64].to_vec());
+        
         // let circuit_poly = Polynomial(extract_coeffs(&reduced));
         
         let native_prod_alloc: Vec<AllocatedNum<Fp>> = native_prod.0.iter().enumerate().map(|(i, &coeff)| {
@@ -681,7 +648,11 @@ mod tests {
                 Ok(Fp::from(coeff as u64))
             })
         }).collect::<Result<_, _>>().unwrap();
-
+        
+        // 17,280 constraints with second modulo reduction on size 64 subarray
+        println!("Number of constraints for ntt multiplication: {}", cs.num_constraints());
+        
+        let reduced: Vec<AllocatedNum<Fp>> = num_reduce_mod_q(cs.namespace(|| "reduced ntt_mult"), &prod_num);
         for i in 0..N {
             cs.enforce(
                 || format!("check_coeff_{}", i),
@@ -695,7 +666,7 @@ mod tests {
         if !cs.is_satisfied() {
             println!("Unsatisfied constraint: {:?}", cs.which_is_unsatisfied());
         }
-        
+
         assert!(cs.is_satisfied(), "Constraint system is not satisfied!");
 
     }
