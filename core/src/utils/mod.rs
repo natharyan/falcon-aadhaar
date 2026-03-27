@@ -1,3 +1,5 @@
+use std::alloc;
+
 use crate::circuit::NUM_COEFF_INDEX_BITS;
 use crate::shake256::SHAKE256_BLOCK_LENGTH_BYTES;
 use bellpepper::gadgets::{multipack::bytes_to_bits,boolean::AllocatedBit,num::Num};
@@ -10,7 +12,7 @@ use clap::error;
 use falcon_rust::{MODULUS, SIG_L2_BOUND, N, Polynomial, PublicKey};
 use ff::{PrimeField, PrimeFieldBits};
 use keccak::f1600;
-use nova_aadhaar_qr::util::{check_decomposition, alloc_num_equals, conditionally_select, num_to_bits};
+use nova_aadhaar_qr::util::{alloc_constant, alloc_num_equals, check_decomposition, conditionally_select, num_to_bits};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -116,7 +118,17 @@ where
     let t_int = &a_int / &modulus_int;
     let b_int = &a_int % &modulus_int;
 
-    let t_val = Scalar::from(t_int.to_u64().unwrap());
+    // convert t_val's little-endian byte representation directly to a field element
+    let t_val = {
+        let t_bytes = t_int.to_bytes_le();
+        let mut repr = <Scalar as PrimeField>::Repr::default();
+        let repr_bytes = repr.as_mut();
+        let copy_len = repr_bytes.len().min(t_bytes.len());
+        repr_bytes[..copy_len].copy_from_slice(&t_bytes[..copy_len]);
+        let ct_option = Scalar::from_repr(repr);
+        let opt: Option<Scalar> = ct_option.into();
+        opt.ok_or(SynthesisError::AssignmentMissing)?
+    };
     let b_val = Scalar::from(b_int.to_u64().unwrap());
 
     let t_var = AllocatedNum::alloc(cs.namespace(|| "t"), || Ok(t_val))?;
@@ -547,4 +559,97 @@ Scalar: PrimeField + PrimeFieldBits + PartialOrd,
     // Boolean::enforce_equal(cs.namespace(|| "enforce less than norm bound"), &res, &Boolean::Constant(true))?;
 
     Ok(res)
+}
+
+/// Return a variable indicating if the input is less than 6144 or not
+/// Cost: 18 constraints.
+/// (This improves the range proof of 1264 constraints as in Arkworks.)
+pub(crate) fn is_less_than_6144<CS, Scalar>(
+    cs: &mut CS,
+    a: &AllocatedNum<Scalar>,
+) -> Result<Boolean, SynthesisError> 
+where
+    CS: ConstraintSystem<Scalar>,
+    Scalar: PrimeField + PrimeFieldBits + PartialOrd,
+{
+    // println!("< norm 6144 satisfied? {:?}", cs.is_satisfied());
+
+    let a_val = a.get_value().unwrap_or(Scalar::ONE);
+
+    // Note that the function returns a boolean and
+    // the input a is allowed to be larger than 6144
+
+    let a_bits = bytes_to_bits_le(a_val.to_repr().as_ref());
+    // a_bit_vars is the least 14 bits of a
+    // (we only care for the first 14 bits of a_bits)
+    let a_bit_vars = a_bits
+        .iter()
+        .take(14)
+        .enumerate()
+        .map(|(i, &bit)| {
+            Ok(Boolean::from(AllocatedBit::alloc(
+                cs.namespace(|| format!("is_less_than_6144 bit {}", i)),
+                Some(bit),
+            )?))
+        })
+        .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
+
+    // ensure that a_bits are the bit decomposition of a
+    check_decomposition(cs.namespace(|| "enforce_decomposition_is_less_than_6144"), a, a_bit_vars.clone())?;
+
+    // argue that a < 6144 = 2^12 + 2^11 via the following:
+    // - a[13] == 0 and
+    // - either a[12] == 0 or a[11] == 0
+
+    // a[13] == 0
+    let bit13_is_zero = a_bit_vars[13].not();
+    let bit12_is_zero = a_bit_vars[12].not();
+    let bit11_is_zero = a_bit_vars[11].not();
+
+    let inner_or = Boolean::or(
+        cs.namespace(|| "lt6144 bit12_zero OR bit11_zero"),
+        &bit12_is_zero,
+        &bit11_is_zero,
+    )?;
+
+    let res = Boolean::and(
+        cs.namespace(|| "lt6144 bit13_zero AND inner"),
+        &bit13_is_zero,
+        &inner_or,
+    )?;
+
+    Ok(res)
+}
+
+pub(crate) fn normalize_half_q<CS, Scalar>(
+    cs: &mut CS,
+    a: &AllocatedNum<Scalar>,
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
+where
+    CS: ConstraintSystem<Scalar>,
+    Scalar: PrimeField + PrimeFieldBits + PartialOrd,
+{
+    let modulus_scalar = Scalar::from(MODULUS as u64);
+    let modulus_var = alloc_constant(cs.namespace(|| "modulus"), modulus_scalar)?;
+
+    let modulus_minus_a = AllocatedNum::alloc(cs.namespace(|| "modulus_minus_a"), || {
+        let a_val = a
+            .get_value()
+            .ok_or(SynthesisError::AssignmentMissing)?;
+        Ok(modulus_scalar - a_val)
+    })?;
+    cs.enforce(
+        || "modulus_minus_a + a = modulus",
+        |lc| lc + modulus_minus_a.get_variable() + a.get_variable(),
+        |lc| lc + CS::one(),
+        |lc| lc + modulus_var.get_variable(),
+    );
+
+    let flag_less_than_q = is_less_than_6144(cs, a)?;
+    conditionally_select(
+        cs.namespace(|| "normalize_half_q"),
+        a,
+        &modulus_minus_a,
+        &flag_less_than_q,
+    )
 }

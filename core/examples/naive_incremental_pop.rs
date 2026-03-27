@@ -1,25 +1,12 @@
-// TODO
-
-use nova_aadhaar_qr::util::{
-    alloc_constant,
-};
-use nova_aadhaar_qr::qr::*;
-use nova_aadhaar_qr::sha256::*;
-use nova_aadhaar_qr::rsa::*;
-use nova_aadhaar_qr::poseidon::*;
-use nova_aadhaar_qr::circuit::*;
-use falcon_rust::Polynomial;
-use falcon_rust::Signature;
-use falcon_rust::MODULUS;
-
 use std::time::Instant;
 
 use clap::Command;
+use falcon_rust::KeyPair;
 use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
-// use nova_aadhaar_qr::{
-//     circuit::{AadhaarAgeProofCircuit, OP_CODE_LAST},
-// };
+use falcon_aadhaar::{
+    circuit::OP_CODE_LAST, incremental_proof_of_possession::NaiveProofOfPossessionCircuit, qr::parse_aadhaar_qr_data
+};
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
     traits::{circuit::TrivialCircuit, snark::RelaxedR1CSSNARKTrait, Engine},
@@ -30,78 +17,33 @@ use zlib_rs::{
     inflate::{uncompress_slice, InflateConfig},
     ReturnCode,
 };
-
-// use falcon_aadhaar::{qr::{parse_aadhaar_qr_data, AadhaarQRData}, circuit::{AadhaarAgeProofCircuit, OP_CODE_LAST}};
+use bellpepper_core::ConstraintSystem;
+use bellpepper_core::test_cs::TestConstraintSystem;
+use bellpepper_core::num::AllocatedNum;
+use nova_snark::traits::circuit::StepCircuit;
 
 fn main() {
-    let cmd = Command::new("Aadhaar-based Proof of 18+ Age")
-        .bin_name("proveage")
-        .arg(
-            clap::Arg::new("aadhaar_qrcode_image")
-                .value_name("Aadhaar QR code image file")
-                .required(true),
-        )
-        .arg(
-            clap::Arg::new("current_date")
-                .value_name("Current date in DD-MM-YYYY format")
-                .required(true),
-        )
-        .after_help("The proveage command proves that the Aadhaar holder is 18+");
 
-    let m = cmd.get_matches();
-    let fname = m.get_one::<String>("aadhaar_qrcode_image").unwrap();
-    let current_date_str = m.get_one::<String>("current_date").unwrap();
-    let current_date_bytes: &[u8; 10] = current_date_str.as_bytes().try_into().unwrap();
-
-    let img = image::open(fname).unwrap().to_luma8();
-    // Prepare for detection
-    let mut img = rqrr::PreparedImage::prepare(img);
-    // Search for grids, without decoding
-    let grids = img.detect_grids();
-    assert_eq!(grids.len(), 1);
-    // Decode the grid
-    let (_, content) = grids[0].decode().unwrap();
-    println!("Aadhaar QR code content: {}", content);
-    let content_bytes = content.as_bytes();
-    let qr_int = BigInt::parse_bytes(content_bytes, 10).unwrap();
-    let (_, qr_int_bytes) = qr_int.to_bytes_be();
-
-    let mut output = [0; 1 << 13];
-    let config = InflateConfig { window_bits: 31 };
-    let (decompressed_qr_bytes, ret) = uncompress_slice(&mut output, &qr_int_bytes, config);
-    assert_eq!(ret, ReturnCode::Ok);
-
-    // Split by 0xFF delimiter and print readable fields
-    let fields: Vec<&[u8]> = decompressed_qr_bytes.split(|&b| b == 0xFF).collect();
-
-    println!("=== Aadhaar QR Fields ===");
-    for (i, field) in fields.iter().enumerate() {
-        // Try to display as UTF-8 string, skip binary fields (photo/signature)
-        if let Ok(text) = std::str::from_utf8(field) {
-            if !text.is_empty() && text.chars().all(|c| !c.is_control() || c == '\n') {
-                println!("Field {}: {}", i, text);
-            } else {
-                println!("Field {}: [binary data, {} bytes]", i, field.len());
-            }
-        } else {
-            println!("Field {}: [binary data, {} bytes]", i, field.len());
-        }
-    }
-    // println!("{:?}", String::from_utf8_lossy(decompressed_qr_bytes));
+    let keypair = KeyPair::keygen();
+    let msg = "testing message";
+    let sig = keypair
+        .secret_key
+        .sign_with_seed("test seed".as_ref(), msg.as_ref());
+    assert!(keypair.public_key.verify(msg.as_ref(), &sig));
+    
     type E1 = PallasEngine;
     type E2 = VestaEngine;
     type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
     type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
     type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
-    type C1 = AadhaarAgeProofCircuit<<E1 as Engine>::Scalar>;
+    type C1 = NaiveProofOfPossessionCircuit<<E1 as Engine>::Scalar>;
     type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
-    let circuit_primary: C1 = AadhaarAgeProofCircuit::default();
+    let circuit_primary: C1 = NaiveProofOfPossessionCircuit::default();
     let circuit_secondary: C2 = TrivialCircuit::default();
 
     let param_gen_timer = Instant::now();
     println!("Producing public parameters...");
-    // NOTE calls the synthesize function of AadhaarAgeProofCircuit to compute R1CS constraints
     let pp = PublicParams::<E1, E2, C1, C2>::setup(
         &circuit_primary,
         &circuit_secondary,
@@ -130,17 +72,10 @@ fn main() {
         pp.num_variables().1
     );
 
-    let res = parse_aadhaar_qr_data(decompressed_qr_bytes.to_vec());
-    if !res.is_ok() {
-        panic!("Error parsing Aadhaar QR code bytes")
-    }
-    // ANCHOR AadhaarQRData with signed_data, falcon_signature, dob_byte_index
-    let aadhaar_qr_data: AadhaarQRData = res.unwrap();
-    println!("Number of bytes in QR code: {}", aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len());
-    let primary_circuit_sequence = C1::new_state_sequence(&aadhaar_qr_data);
+    let primary_circuit_sequence = C1::new_state_sequence(&msg.as_bytes().to_vec(), &sig,keypair.public_key);
 
-    let z0_primary = C1::calc_initial_primary_circuit_input(current_date_bytes); // initial_opcode, current_date_scalar
-    let z0_secondary = vec![<E2 as Engine>::Scalar::zero()]; // TODO: ?
+    let z0_primary = C1::calc_initial_primary_circuit_input(&msg.as_bytes().to_vec(), &sig);
+    let z0_secondary = vec![<E2 as Engine>::Scalar::zero()];
 
     let proof_gen_timer = Instant::now();
     // produce a recursive SNARK
@@ -155,6 +90,39 @@ fn main() {
         )
         .unwrap();
 
+    let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
+
+    for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
+        let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
+        
+        let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
+            .iter()
+            .enumerate()
+            .map(|(j, val)| {
+                AllocatedNum::alloc(
+                    cs.namespace(|| format!("z_{}", j)),
+                    || Ok(*val)
+                ).unwrap()
+            })
+            .collect();
+
+        let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
+
+        if !cs.is_satisfied() {
+            println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
+            break;
+        } else {
+            println!("Step {} OK", 
+                i,
+            );
+        }
+
+        z_current = z_next_alloc
+            .iter()
+            .map(|v| v.get_value().unwrap())
+            .collect();
+    }
+
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
         let step_start = Instant::now();
@@ -166,7 +134,6 @@ fn main() {
             res.is_ok(),
             step_start.elapsed()
         );
-
     }
     println!(
         "Total time taken by RecursiveSNARK::prove_steps: {:?}",
@@ -235,10 +202,8 @@ fn main() {
 
     let final_outputs = res.unwrap().0;
 
-    let final_opcode = final_outputs[0];
-    assert_eq!(final_opcode, <E1 as Engine>::Scalar::from(OP_CODE_LAST + 1));
+    let final_coeff_index = final_outputs[1];
+    assert_eq!(final_coeff_index, <E1 as Engine>::Scalar::from(511));
 
-    println!("Nullifier = {:?}", final_outputs[1]);
+    println!("l2norm(s1,s2) = {:?}", final_outputs[0]);
 }
-
-fn main() {}
