@@ -5,7 +5,7 @@ use falcon_rust::KeyPair;
 use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
 use falcon_aadhaar::{
-    circuit::OP_CODE_LAST, incremental_proof_of_possession::NaiveProofOfPossessionCircuit, qr::parse_aadhaar_qr_data
+    age_proof::OP_CODE_LAST, proof_possession_incremental::NaiveProofOfPossessionCircuit, qr::parse_aadhaar_qr_data
 };
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
@@ -22,6 +22,15 @@ use bellpepper_core::test_cs::TestConstraintSystem;
 use bellpepper_core::num::AllocatedNum;
 use nova_snark::traits::circuit::StepCircuit;
 
+type E1 = PallasEngine;
+type E2 = VestaEngine;
+type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
+type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
+type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
+type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
+type C1 = NaiveProofOfPossessionCircuit<<E1 as Engine>::Scalar>;
+type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
+
 fn main() {
 
     let keypair = KeyPair::keygen();
@@ -31,14 +40,6 @@ fn main() {
         .sign_with_seed("test seed".as_ref(), msg.as_ref());
     assert!(keypair.public_key.verify(msg.as_ref(), &sig));
     
-    type E1 = PallasEngine;
-    type E2 = VestaEngine;
-    type EE1 = nova_snark::provider::ipa_pc::EvaluationEngine<E1>;
-    type EE2 = nova_snark::provider::ipa_pc::EvaluationEngine<E2>;
-    type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
-    type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
-    type C1 = NaiveProofOfPossessionCircuit<<E1 as Engine>::Scalar>;
-    type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
     let circuit_primary: C1 = NaiveProofOfPossessionCircuit::default();
     let circuit_secondary: C2 = TrivialCircuit::default();
 
@@ -90,38 +91,37 @@ fn main() {
         )
         .unwrap();
 
-    let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
-
-    for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
-        let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
+    // let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
+    // for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
+    //     let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
         
-        let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
-            .iter()
-            .enumerate()
-            .map(|(j, val)| {
-                AllocatedNum::alloc(
-                    cs.namespace(|| format!("z_{}", j)),
-                    || Ok(*val)
-                ).unwrap()
-            })
-            .collect();
+    //     let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
+    //         .iter()
+    //         .enumerate()
+    //         .map(|(j, val)| {
+    //             AllocatedNum::alloc(
+    //                 cs.namespace(|| format!("z_{}", j)),
+    //                 || Ok(*val)
+    //             ).unwrap()
+    //         })
+    //         .collect();
 
-        let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
+    //     let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
 
-        if !cs.is_satisfied() {
-            println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
-            break;
-        } else {
-            println!("Step {} OK", 
-                i,
-            );
-        }
+    //     if !cs.is_satisfied() {
+    //         println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
+    //         break;
+    //     } else {
+    //         println!("Step {} OK", 
+    //             i,
+    //         );
+    //     }
 
-        z_current = z_next_alloc
-            .iter()
-            .map(|v| v.get_value().unwrap())
-            .collect();
-    }
+    //     z_current = z_next_alloc
+    //         .iter()
+    //         .map(|v| v.get_value().unwrap())
+    //         .collect();
+    // }
 
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
@@ -150,6 +150,9 @@ fn main() {
         res.is_ok(),
         start.elapsed()
     );
+    if let Err(e) = &res {
+        println!("Verification failed with error: {:?}", e);
+    }
     assert!(res.is_ok());
 
     // produce a compressed SNARK

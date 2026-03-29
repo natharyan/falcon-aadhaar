@@ -98,7 +98,7 @@ impl<F: PrimeField> ConstraintSynthesizer<F> for FalconSchoolBookVerificationCir
             // NOTE no constraints made before this
             // NOTE creates 28 constraints
             // NOTE can be skipped as if any coefficient of v is >= MODULUS, then l2-norm(sig | v) >= MODULUS^2 > 34034726
-            // enforce_less_than_q(cs.clone(), &tmp)?;
+            enforce_less_than_q(cs.clone(), &tmp)?;
             v_pos_vars.push(tmp);
         }
 

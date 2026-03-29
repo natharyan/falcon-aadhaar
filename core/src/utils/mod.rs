@@ -1,7 +1,7 @@
 use std::alloc;
 
-use crate::circuit::NUM_COEFF_INDEX_BITS;
-use crate::shake256::SHAKE256_BLOCK_LENGTH_BYTES;
+use crate::age_proof::NUM_COEFF_INDEX_BITS;
+use crate::hash::shake256::SHAKE256_BLOCK_LENGTH_BYTES;
 use bellpepper::gadgets::{multipack::bytes_to_bits,boolean::AllocatedBit,num::Num};
 use bellpepper_core::boolean::{Boolean};
 
@@ -20,7 +20,7 @@ use sha3::{
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 
-/// Reference implementation of SHAKE256 using sha3 crate
+/// library implementation of SHAKE256 using sha3 crate
 pub(crate) fn shake_256(input: &[u8], d: usize) -> Vec<u8> {
     let mut hasher = Shake256::default();
     hasher.update(input);

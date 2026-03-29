@@ -4,7 +4,7 @@
 
 // use crate::{
 //     gadgets::bellpepper_uint64::UInt64,
-//     shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, keccak_f_1600, library_step_sponge},
+//     hash::shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, keccak_f_1600, library_step_sponge},
 //     utils::{bits_to_bytes_le, bytes_to_bits_le, mod_q, inner_product_mod},
 //     gadgets::ntt_poly_mult::*,
 // };

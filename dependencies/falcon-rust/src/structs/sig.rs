@@ -58,7 +58,6 @@ fn comp_decode(input: &[u8]) -> [u16; 512] {
     let mut input_pt = 0;
     let mut acc = 0u32;
     let mut acc_len = 0;
-    // FIXME make it dynamic for 512/1024
     // let mut output = [0u16; N]; // for 1024
     let mut output = [0u16; 512];
 
