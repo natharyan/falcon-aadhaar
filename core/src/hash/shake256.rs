@@ -2,6 +2,11 @@
 // modified to include shake256, variable input length, and squeezing phase of the sponge construction of keccak for variable output length.
 // Bellpepper implementation of https://github.com/natharyan/arkworks-keccak/blob/main/src/constraints.rs for shake256
 
+use crate::gadgets::bellpepper_uint64::UInt64;
+use crate::utils::{
+    arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le,
+    vec_bool_to_arr_u64,
+};
 use bellpepper::gadgets::multipack::bytes_to_bits;
 use bellpepper_core::ConstraintSystem;
 use bellpepper_core::SynthesisError;
@@ -12,13 +17,7 @@ use sha3::{
     Digest, Keccak256, Sha3_256, Shake128, Shake256,
     digest::{ExtendableOutput, Update, XofReader},
 };
-
-use crate::gadgets::bellpepper_uint64::UInt64;
-use crate::utils::{
-    arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le,
-    vec_bool_to_arr_u64,
-};
-use ff::PrimeField;
+use ff::PrimeFieldBits;
 
 pub(crate) const SHAKE256_BLOCK_LENGTH_BITS: usize = 1088;
 pub(crate) const SHAKE256_BLOCK_LENGTH_BYTES: usize = 136;
@@ -72,9 +71,51 @@ pub(crate) fn library_step_sponge(
     arr_u64_to_vec_bool(&input_arr_u64)
 }
 
+fn add_shake256_padding(input: Vec<u8>) -> Vec<u8> {
+    // let length_in_bits = (input.len() * 8) as u64;
+    // let mut padded_input = input;
+    // // appending a single '1' bit followed by 7 '0' bits
+    // // This is because the input is a byte vector
+    // padded_input.push(128u8);
+
+    // // Append zeros until the padded input (including 64-byte length)
+    // // is a multiple of 64 bytes. Note that input is always a byte vector.
+    // while (padded_input.len() + 8) % SHAKE256_BLOCK_LENGTH_BYTES != 0 {
+    //     padded_input.push(0u8);
+    // }
+    // padded_input.append(&mut length_in_bits.to_be_bytes().to_vec());
+    // padded_input
+
+    let input_bits = bytes_to_bits_le(&input);
+    let mut padded: Vec<bool> = input_bits;
+    // append 1111 for domain separation for shake256 (https://keccak.team/files/Keccak-submission-3.pdf, section 2.1.2)
+    padded.push(true);
+    padded.push(true);
+    padded.push(true);
+    padded.push(true);
+    // append a single 1 bit
+    padded.push(true);
+    // append K '0' bits, where K is the minimum number >= 0 such that L + 1 + K  is a multiple of r = 1088
+    while (padded.len() + 1) % 1088 != 0 {
+        padded.push(false);
+    }
+    padded.push(true);
+    bits_to_bytes_le(&padded)
+}
+
+pub(crate) fn shake256_msg_block_sequence(input: Vec<u8>) -> Vec<[u8; SHAKE256_BLOCK_LENGTH_BYTES]> {
+    let padded_input = add_shake256_padding(input);
+    assert!(padded_input.len() % SHAKE256_BLOCK_LENGTH_BYTES == 0);
+    let shake256_msg_blocks: Vec<[u8; 136]> = padded_input
+        .chunks(SHAKE256_BLOCK_LENGTH_BYTES)
+        .map(|chunk| chunk.try_into().unwrap())
+        .collect();
+    shake256_msg_blocks
+}
+
 fn xor_2<E, CS>(mut cs: CS, a: &UInt64, b: &UInt64) -> Result<UInt64, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     // a ^ b
@@ -90,7 +131,7 @@ fn xor_5<E, CS>(
     e: &UInt64,
 ) -> Result<UInt64, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     // a ^ b ^ c ^ d ^ e
@@ -107,7 +148,7 @@ fn xor_not_and<E, CS>(
     c: &UInt64,
 ) -> Result<UInt64, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     // a ^ ((!b) & c)
@@ -118,7 +159,7 @@ where
 
 fn round_1600<E, CS>(mut cs: CS, a: &[UInt64], rc: u64) -> Result<Vec<UInt64>, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     assert_eq!(a.len(), 25);
@@ -200,7 +241,7 @@ where
 
 pub(crate) fn keccak_f_1600<E, CS>(mut cs: CS, input: &[Boolean]) -> Result<Vec<Boolean>, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     assert_eq!(input.len(), 1600);
@@ -220,7 +261,7 @@ where
 
 pub fn pad101<E, CS>(_cs: CS, input: &[Boolean]) -> Result<Vec<Boolean>, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     let mut padded: Vec<Boolean> = input.to_vec();
@@ -261,7 +302,7 @@ pub fn shake256_inject<E, CS>(
     r: usize,
 ) -> Result<Vec<Boolean>, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     let m_blocks: Vec<Vec<Boolean>> = split_to_blocks(&padded_message)?;
@@ -294,7 +335,7 @@ pub fn shake256_extract<E, CS>(
     d: usize,
 ) -> Result<Vec<Boolean>, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     let mut z: Vec<Boolean> = Vec::new();
@@ -319,8 +360,9 @@ where
     Ok(z)
 }
 
-pub(crate) fn shake256_msg_blocks(input: Vec<u8>) -> Vec<[u8; SHAKE256_BLOCK_LENGTH_BYTES]> {
-    let mut padded: Vec<bool> = bytes_to_bits_le(&input);
+pub(crate) fn shake256_pad101(input: &Vec<u8>) -> Vec<bool> {
+    let input_bits = bytes_to_bits_le(&input);
+    let mut padded: Vec<bool> = input_bits;
     // append 1111 for domain separation for shake256 (https://keccak.team/files/Keccak-submission-3.pdf, section 2.1.2)
     padded.push(true);
     padded.push(true);
@@ -333,7 +375,14 @@ pub(crate) fn shake256_msg_blocks(input: Vec<u8>) -> Vec<[u8; SHAKE256_BLOCK_LEN
         padded.push(false);
     }
     padded.push(true);
-    let padded_bytes: Vec<u8> = bits_to_bytes_le(&padded);
+    assert!(padded.len() % SHAKE256_BLOCK_LENGTH_BITS == 0);
+    
+    padded
+}
+
+pub(crate) fn shake256_msg_blocks(input: &Vec<u8>) -> Vec<[u8; SHAKE256_BLOCK_LENGTH_BYTES]> {
+    let padded_bits: Vec<bool> = shake256_pad101(input);
+    let padded_bytes = bits_to_bytes_le(&padded_bits);
     padded_bytes
         .chunks(SHAKE256_BLOCK_LENGTH_BYTES)
         .map(|chunk| chunk.try_into().unwrap())
@@ -346,7 +395,7 @@ pub fn shake256_gadget<E, CS>(
     d: usize,
 ) -> Result<Vec<Boolean>, SynthesisError>
 where
-    E: PrimeField,
+    E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
 {
     let r: usize = 1088;

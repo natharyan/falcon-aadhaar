@@ -31,53 +31,6 @@ type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 type C1 = NaiveProofOfPossessionCircuit<<E1 as Engine>::Scalar>;
 type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
 
-fn diagnose_primary_sequence(
-    sequence: &[C1],
-    z0: &[<E1 as Engine>::Scalar],
-) -> Result<(), String> {
-    let mut z_current = z0.to_vec();
-    println!(
-        "diagnose_primary_sequence: starting replay of {} steps",
-        sequence.len()
-    );
-    for (i, circuit) in sequence.iter().enumerate() {
-        let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
-        let z_alloc = z_current
-            .iter()
-            .enumerate()
-            .map(|(j, val)| {
-                AllocatedNum::alloc(cs.namespace(|| format!("z_{}", j)), || Ok(*val))
-                    .map_err(|err| format!("failed to allocate z_{} at step {}: {}", j, i, err))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let z_next = circuit
-            .synthesize(&mut cs, &z_alloc)
-            .map_err(|err| format!("synthesize failed at step {}: {}", i, err))?;
-
-        if !cs.is_satisfied() {
-            let which = cs
-                .which_is_unsatisfied()
-                .unwrap_or_else(|| "unknown constraint");
-            return Err(format!("constraint '{}' unsatisfied at step {}", which, i));
-        }
-
-        z_current = z_next
-            .iter()
-            .map(|v| {
-                v.get_value()
-                    .ok_or_else(|| format!("missing witness value after step {}", i))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-    }
-
-    println!(
-        "diagnose_primary_sequence: completed replay; final z = {:?}",
-        z_current
-    );
-    Ok(())
-}
-
 fn main() {
 
     let keypair = KeyPair::keygen();
@@ -200,12 +153,6 @@ fn main() {
     );
     if let Err(e) = &res {
         println!("Verification failed with error: {:?}", e);
-        match diagnose_primary_sequence(&primary_circuit_sequence, &z0_primary) {
-            Ok(()) => println!(
-                "Standalone constraint check passed; investigate recursive folding inputs"
-            ),
-            Err(detail) => println!("Constraint debug: {}", detail),
-        }
     }
     assert!(res.is_ok());
 

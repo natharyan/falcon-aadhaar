@@ -16,9 +16,9 @@ pub const DATA_LENGTH_PER_STEP: usize = 136; // 136 bytes will be hashed per Nov
 pub struct AadhaarQRData {
     pub signed_data: Vec<u8>,
     pub rsa_signature: Vec<u8>,
-    pub falcon_signature: Signature,
+    pub falcon_sig: Signature,
     pub dob_byte_index: usize,
-    pub public_key: PublicKey,
+    pub pk: PublicKey,
 }
 
 // #[cfg(feature = "falcon-512")]
@@ -67,8 +67,8 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
     Ok(AadhaarQRData {
         signed_data: qr_data[0..qr_data_len - 256].to_vec(), // All bytes except last 256 are signed
         rsa_signature: qr_data[qr_data_len - 256..].to_vec(), // Last 256 bytes have the RSA signature
-        falcon_signature: sig, // falcon signature over all bytes except the last 256 bytes
+        falcon_sig: sig, // falcon signature over all bytes except the last 256 bytes
         dob_byte_index,
-        public_key: keypair.public_key,
+        pk: keypair.public_key,
     })
 }

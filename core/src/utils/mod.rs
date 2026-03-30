@@ -653,3 +653,14 @@ where
         &flag_less_than_q,
     )
 }
+
+// normalize coefficient in [0,q] to the range [-q/2, q/2]
+pub(crate) fn normalize_coeff(val: i64) -> u64 {
+    let modulus = MODULUS as i64;
+    let normalized = if val > modulus / 2 {
+        (modulus - val) as u64
+    } else {
+        val as u64
+    };
+    normalized
+}

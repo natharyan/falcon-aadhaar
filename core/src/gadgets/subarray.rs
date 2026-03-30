@@ -8,6 +8,7 @@ use blstrs::Scalar;
 use falcon_rust::{MODULUS, N, LOG_N, Polynomial, PublicKey};
 use ff::PrimeFieldBits;
 
+// 5,131 constraints, independent of shift value
 pub(crate) fn var_shift_left<CS, Scalar>(mut cs: CS, input: &Vec<AllocatedNum<Scalar>>, shift: &AllocatedNum<Scalar>, n: usize, nbits: usize) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> 
 where
     Scalar: PrimeFieldBits,
