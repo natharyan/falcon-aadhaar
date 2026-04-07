@@ -2,7 +2,7 @@ use std::ops::Mul;
 use std::{alloc::alloc, ops::Add};
 
 use crate::gadgets::ntt::*;
-use crate::hash::shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, keccak_f_1600, library_step_sponge, shake256_pad101};
+use crate::hash::shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, SHAKE256_RATE_BYTES, keccak_f_1600, library_step_sponge, shake256_pad101};
 use crate::utils::{bits_to_bytes_le, bytes_to_bits_le, enforce_less_than_q, enforce_less_than_norm_bound, inner_product_mod, mod_q, normalize_half_q, num_to_alloc, select_from_vec_linear};
 use crate::ntt::{ntt_deferred_circuit, inv_ntt_deferred_circuit, ntt, ntt_mult_const_p2};
 use crate::age_proof::{COEFF_INDEX_MASK, OP_COEFF_INDEX_FIRST, OP_COEFF_INDEX_LAST, OP_SHAKE256_ACTIVE, OP_SHAKE256_NO_OP, NUM_OPCODE_BITS};
@@ -14,7 +14,7 @@ use falcon_rust::{LOG_N, MODULUS, N, Polynomial, PublicKey, Signature, SIG_L2_BO
 use ff::PrimeFieldBits;
 use nova_aadhaar_qr::poseidon::PoseidonHasher;
 use nova_aadhaar_qr::util::{alloc_constant, alloc_num_equals, alloc_num_equals_constant, boolean_implies, conditionally_select, less_than, num_to_bits};
-use crate::hash::shake256::library_shake_256;
+use crate::hash::shake256::shake_256;
 use nova_snark::traits::circuit::StepCircuit;
 use num_bigint::{BigInt,Sign};
 
@@ -63,29 +63,27 @@ where
         let initial_l2_norm_sum = Scalar::from(0u64);
         let intial_coeff_index = Scalar::from(0u64);
 
-        let msg_bits= shake256_pad101(msg);
-        let msg: Vec<u8> = bits_to_bytes_le(&msg_bits).try_into().unwrap();
-        let shake_inject_m_bytes: [u8; SHAKE256_DIGEST_LENGTH_BYTES] = library_shake_256(&msg, SHAKE256_DIGEST_LENGTH_BYTES).try_into().unwrap();
+        let msg_bits = shake256_pad101(msg);
+        let padded_msg: Vec<u8> = bits_to_bytes_le(&msg_bits).try_into().unwrap();
+        let shake_inject_m_bytes: [u8; SHAKE256_DIGEST_LENGTH_BYTES] =
+            shake_256(&padded_msg, SHAKE256_DIGEST_LENGTH_BYTES).try_into().unwrap();
         let shake_inject_m_bits = bytes_to_bits(&shake_inject_m_bytes);
-        let shake_inject_m_scalars = compute_multipacking::<Scalar>(&shake_inject_m_bits);
+        let shake_inject_m = compute_multipacking::<Scalar>(&shake_inject_m_bits);
+        assert_eq!(shake_inject_m.len(), 7);
 
-        let s2: Polynomial = sig.into();
-        let c: Vec<u16> = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce()).coeff().iter().map(|x| *x as u16).collect::<Vec<u16>>().try_into().unwrap();
+        let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
         
         // calculate hash_c and hash_s2
-        let c_scalars: Vec<Scalar> = c.iter().map(|&x| Scalar::from(x as u64)).collect();
-        let s2_scalars = s2.coeff().iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
+        let c_scalars: Vec<Scalar> = c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
         let hash_c = c_hasher.hash(&c_scalars);
-        let s2_hasher = PoseidonHasher::<Scalar>::new(s2_scalars.len() as u32);
-        let hash_s2 = s2_hasher.hash(&s2_scalars);
         // io_hash
         // let io_hash_scalars = [c_scalars, s2_scalars, vec![initial_l2_norm_sum, intial_coeff_index]].concat();
         // let io_hash_scalars = [c_scalars, s2_scalars, vec![intial_coeff_index]].concat();
         // let hasher = PoseidonHasher::<Scalar>::new(io_hash_scalars.len() as u32);
         // let io_hash = hasher.hash(&io_hash_scalars);
         // The last scalar corresponds to the current date
-        vec![initial_l2_norm_sum, intial_coeff_index, hash_c, hash_s2, shake_inject_m_scalars[0]]
+        vec![initial_l2_norm_sum, intial_coeff_index, hash_c, shake_inject_m[0]]
     }
 
     // calculate NaiveProofOfPossessionCircuit for all steps
@@ -109,11 +107,13 @@ where
         let s2_hasher = PoseidonHasher::<Scalar>::new(s2_scalars.len() as u32);
         let hash_s2 = s2_hasher.hash(&s2_scalars);
 
-        let msg_bits= shake256_pad101(msg);
-        let msg: Vec<u8> = bits_to_bytes_le(&msg_bits).try_into().unwrap();
-        let shake_inject_m_bytes: [u8; SHAKE256_DIGEST_LENGTH_BYTES] = library_shake_256(&msg, SHAKE256_DIGEST_LENGTH_BITS / 8).try_into().unwrap();
+        let msg_bits = shake256_pad101(msg);
+        let padded_msg: Vec<u8> = bits_to_bytes_le(&msg_bits).try_into().unwrap();
+        let shake_inject_m_bytes: [u8; SHAKE256_DIGEST_LENGTH_BYTES] =
+            shake_256(&padded_msg, SHAKE256_DIGEST_LENGTH_BYTES).try_into().unwrap();
         let shake_inject_m_bits = bytes_to_bits(&shake_inject_m_bytes);
-        let shake_inject_m_scalars = compute_multipacking::<Scalar>(&shake_inject_m_bits);
+        let shake_inject_m = compute_multipacking::<Scalar>(&shake_inject_m_bits);
+        assert_eq!(shake_inject_m.len(), 7);
         // let io_hash_scalars = [c_scalars.clone(), s2_scalars.clone(), vec![l2_norm_sum.into(), coeff_index.into()]].concat();
         // let io_hash_scalars = [c_scalars.clone(), s2_scalars.clone(), vec![coeff_index.into()]].concat();
         // let hasher = PoseidonHasher::<Scalar>::new(io_hash_scalars.len() as u32);
@@ -125,7 +125,7 @@ where
             coeff_index: coeff_index,
             hash_c: hash_c,
             hash_s2: hash_s2,
-            shake_inject_m: shake_inject_m_scalars[0],
+            shake_inject_m: shake_inject_m[0],
             s2: s2,
             c: c.clone().try_into().unwrap(),
             h: pk_poly,
@@ -164,7 +164,7 @@ where
                 coeff_index: coeff_index,
                 hash_c: hash_c,
                 hash_s2: hash_s2,
-                shake_inject_m: shake_inject_m_scalars[i % shake_inject_m_scalars.len()],
+                shake_inject_m: shake_inject_m[i % shake_inject_m.len()],
                 s2: s2.clone(),
                 c: c.clone().try_into().unwrap(),
                 h: pk_poly,
@@ -181,7 +181,7 @@ where
     Scalar: PrimeFieldBits + PartialOrd,
 {
     fn arity(&self) -> usize {
-        5
+        4
     }
 
     fn synthesize<CS>(
@@ -195,8 +195,12 @@ where
         let l2_norm_sum_var = z[0].clone();
         let coeff_index_var = z[1].clone();
         let hash_c = z[2].clone();
-        let hash_s2 = z[3].clone();
-        let shake_inject_m = z[4].clone();
+        let shake_inject_m = z[3].clone();
+
+        let next_shake_inject_m = AllocatedNum::alloc(
+            cs.namespace(|| "next_shake_inject_m alloc"),
+            || Ok(self.shake_inject_m),
+        )?;
 
         let c_scalars = self.c.iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
         let s2_scalars = self.s2.coeff().iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
@@ -234,18 +238,18 @@ where
             |lc| lc + CS::one(),
             |lc| lc,
         );
-        // enforce H_pos(s2) = Hash_s2
-        let s2_hasher = PoseidonHasher::<Scalar>::new(s2_vars.len() as u32);
-        let hpos_s2 = s2_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "poseidon hash s2 coefficients"),
-            &s2_vars,
-        )?;
-        cs.enforce(
-            || "enforce H_pos(s2) == hash_s2",
-            |lc| lc + hpos_s2.get_variable() - hash_s2.get_variable(),
-            |lc| lc + CS::one(),
-            |lc| lc,
-        );
+        // no need to enforce hash match for s2 as > 0 number of coefficients are used in each step
+        // let s2_hasher = PoseidonHasher::<Scalar>::new(s2_vars.len() as u32);
+        // let hpos_s2 = s2_hasher.hash_in_circuit(
+        //     &mut cs.namespace(|| "poseidon hash s2 coefficients"),
+        //     &s2_vars,
+        // )?;
+        // cs.enforce(
+        //     || "enforce H_pos(s2) == hash_s2",
+        //     |lc| lc + hpos_s2.get_variable() - hash_s2.get_variable(),
+        //     |lc| lc + CS::one(),
+        //     |lc| lc,
+        // );
 
         let s2_coeff = select_from_vec_linear(cs.namespace(|| "s2_coeff"), &s2_vars, &coeff_index_var)?;
         let c_coeff = select_from_vec_linear(cs.namespace(|| "c_coeff"), &c_vars, &coeff_index_var)?;
@@ -322,7 +326,7 @@ where
         let l2_norm_sum_var = l2_norm_sum_var.add(cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_update"), &sum_update)?;
         
         let var_512 = alloc_constant(cs.namespace(|| "alloc_constant 512"), Scalar::from(512u64))?;
-        let flag_coeff = less_than(cs.namespace(|| "flag_coeff"), &coeff_index_var, &var_512, LOG_N)?;
+        let flag_coeff = less_than(cs.namespace(|| "flag_coeff"), &coeff_index_var, &var_512, LOG_N + 1)?;
 
         // let io_hash_next_inputs = [c_vars, s2_vars, vec![l2_norm_sum_var.clone(), coeff_index_var.clone()]].concat();
         // let io_hash_next_inputs = [c_vars, s2_vars, vec![coeff_index_var.clone()]].concat();
@@ -336,7 +340,7 @@ where
         let res = Boolean::or(cs.namespace(|| "boolean or flag_coeff flag_norm_bound"), &flag_coeff, &flag_norm_bound)?;
         Boolean::enforce_equal(cs.namespace(|| "enforce or result is true"), &res, &Boolean::Constant(true))?;
 
-        let z_out = vec![l2_norm_sum_var, coeff_index_var, hash_c, hash_s2, shake_inject_m];
+        let z_out = vec![l2_norm_sum_var, coeff_index_var, hash_c, next_shake_inject_m];
         Ok(z_out)
     }
 }

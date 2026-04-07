@@ -20,16 +20,6 @@ use sha3::{
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
 
-/// library implementation of SHAKE256 using sha3 crate
-pub(crate) fn shake_256(input: &[u8], d: usize) -> Vec<u8> {
-    let mut hasher = Shake256::default();
-    hasher.update(input);
-    let mut reader = hasher.finalize_xof();
-    let mut result = vec![0u8; d];
-    XofReader::read(&mut reader, &mut result);
-    result
-}
-
 /// Convert bytes to little-endian bits
 pub(crate) fn bytes_to_bits_le(bytes: &[u8]) -> Vec<bool> {
     bytes

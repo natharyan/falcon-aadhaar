@@ -11,7 +11,7 @@ use bellpepper::gadgets::multipack::bytes_to_bits;
 use bellpepper_core::ConstraintSystem;
 use bellpepper_core::SynthesisError;
 use bellpepper_core::boolean::Boolean;
-use proptest::bits;
+use proptest::{bits, strategy};
 use keccak::f1600;
 use sha3::{
     Digest, Keccak256, Sha3_256, Shake128, Shake256,
@@ -23,6 +23,8 @@ pub(crate) const SHAKE256_BLOCK_LENGTH_BITS: usize = 1088;
 pub(crate) const SHAKE256_BLOCK_LENGTH_BYTES: usize = 136;
 pub(crate) const SHAKE256_DIGEST_LENGTH_BYTES: usize = 200;
 pub(crate) const SHAKE256_DIGEST_LENGTH_BITS: usize = 1600;
+pub(crate) const SHAKE256_RATE_BITS: usize = 1088;
+pub(crate) const SHAKE256_RATE_BYTES: usize = 136;
 
 // use bellpepper_uint64 as uint64;
 // use uint64::UInt64;
@@ -40,13 +42,42 @@ const ROTR: [usize; 25] = [
     0, 1, 62, 28, 27, 36, 44, 6, 55, 20, 3, 10, 43, 25, 39, 41, 45, 15, 21, 8, 18, 2, 61, 56, 14,
 ];
 
-pub fn library_shake_256(input: &[u8], d: usize) -> Vec<u8> {
+/// library implementation of SHAKE256 using sha3 crate
+pub(crate) fn shake_256(input: &[u8], d: usize) -> Vec<u8> {
     let mut hasher = Shake256::default();
     hasher.update(input);
     let mut reader = hasher.finalize_xof();
     let mut result = vec![0u8; d];
     XofReader::read(&mut reader, &mut result);
     result
+}
+
+fn add_shake256_padding(input: Vec<bool>) -> Vec<bool> {
+    let mut padded: Vec<bool> = input;
+    // append 1111 for domain separation for shake256 (https://keccak.team/files/Keccak-submission-3.pdf, section 2.1.2)
+    padded.push(true);
+    padded.push(true);
+    padded.push(true);
+    padded.push(true);
+    // append a single 1 bit
+    padded.push(true);
+    // append K '0' bits, where K is the minimum number >= 0 such that L + 1 + K  is a multiple of r = 1088
+    while (padded.len() + 1) % 1088 != 0 {
+        padded.push(false);
+    }
+    padded.push(true);
+    padded
+}
+
+/// apply shake256.pad101 and split into blocks of size r = 1088 bits
+pub(crate) fn shake256_msg_block_sequence(input: Vec<bool>) -> Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> {
+    let padded_input = add_shake256_padding(input);
+    assert!(padded_input.len() % SHAKE256_BLOCK_LENGTH_BITS == 0);
+    let shake256_msg_blocks: Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> = padded_input
+        .chunks(SHAKE256_BLOCK_LENGTH_BITS)
+        .map(|chunk| chunk.try_into().unwrap())
+        .collect();
+    shake256_msg_blocks
 }
 
 /// One step of the absorption (flag = false) or squeezing phase (flag = true)
@@ -71,47 +102,18 @@ pub(crate) fn library_step_sponge(
     arr_u64_to_vec_bool(&input_arr_u64)
 }
 
-fn add_shake256_padding(input: Vec<u8>) -> Vec<u8> {
-    // let length_in_bits = (input.len() * 8) as u64;
-    // let mut padded_input = input;
-    // // appending a single '1' bit followed by 7 '0' bits
-    // // This is because the input is a byte vector
-    // padded_input.push(128u8);
+pub(crate) fn library_shake256_inject(mut state: [bool; 1600], msg: Vec<u8>) -> [bool; 1600] {
+    let msg_bits = bytes_to_bits_le(&msg);
+    let m_blocks: Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> = shake256_msg_block_sequence(msg_bits);
 
-    // // Append zeros until the padded input (including 64-byte length)
-    // // is a multiple of 64 bytes. Note that input is always a byte vector.
-    // while (padded_input.len() + 8) % SHAKE256_BLOCK_LENGTH_BYTES != 0 {
-    //     padded_input.push(0u8);
-    // }
-    // padded_input.append(&mut length_in_bits.to_be_bytes().to_vec());
-    // padded_input
-
-    let input_bits = bytes_to_bits_le(&input);
-    let mut padded: Vec<bool> = input_bits;
-    // append 1111 for domain separation for shake256 (https://keccak.team/files/Keccak-submission-3.pdf, section 2.1.2)
-    padded.push(true);
-    padded.push(true);
-    padded.push(true);
-    padded.push(true);
-    // append a single 1 bit
-    padded.push(true);
-    // append K '0' bits, where K is the minimum number >= 0 such that L + 1 + K  is a multiple of r = 1088
-    while (padded.len() + 1) % 1088 != 0 {
-        padded.push(false);
+    for m_i in m_blocks.iter() {
+        state = library_step_sponge(state.to_vec(), Some(m_i.to_vec()), 1088, false);
     }
-    padded.push(true);
-    bits_to_bytes_le(&padded)
+
+    state
 }
 
-pub(crate) fn shake256_msg_block_sequence(input: Vec<u8>) -> Vec<[u8; SHAKE256_BLOCK_LENGTH_BYTES]> {
-    let padded_input = add_shake256_padding(input);
-    assert!(padded_input.len() % SHAKE256_BLOCK_LENGTH_BYTES == 0);
-    let shake256_msg_blocks: Vec<[u8; 136]> = padded_input
-        .chunks(SHAKE256_BLOCK_LENGTH_BYTES)
-        .map(|chunk| chunk.try_into().unwrap())
-        .collect();
-    shake256_msg_blocks
-}
+// Bellpepper implementation of the above library functions
 
 fn xor_2<E, CS>(mut cs: CS, a: &UInt64, b: &UInt64) -> Result<UInt64, SynthesisError>
 where
@@ -324,6 +326,9 @@ where
             assert_eq!(o.get_value().unwrap(), i, "keccak step mismatch!!");
         }
     }
+
+    assert_eq!(state.len(), 1600);
+    
     Ok(state)
 }
 
@@ -342,16 +347,17 @@ where
     z.extend(truncate(&state, r)?);
     while z.len() < d {
         // expected output for single step of squeezing phase
-        // let expected_state = library_step_sponge(cs, state.clone(), None, r, true)?;
+        let state_bools = state.iter().map(|b| b.get_value().unwrap()).collect();
+        let expected_state = library_step_sponge(state_bools, None, r, true);
         let cs = &mut cs.namespace(|| format!("keccack round in squeezing phase"));
         state = keccak_f_1600(cs, &state)?;
-        // for (o, i) in state.iter().zip(expected_state.iter()) {
-        //     assert_eq!(
-        //         o.value().unwrap(),
-        //         i.value().unwrap(),
-        //         "keccak step mismatch!!"
-        //     );
-        // }
+        for (o, &i) in state.iter().zip(expected_state.iter()) {
+            assert_eq!(
+                o.get_value().unwrap(),
+                i,
+                "keccak step mismatch!!"
+            );
+        }
         z.extend(truncate(&state, r)?);
     }
 
@@ -416,7 +422,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::utils::{bits_to_bytes_le, shake_256};
+    use crate::utils::{bits_to_bytes_le};
     use bellpepper_core::boolean::AllocatedBit;
     use bellpepper_core::test_cs::TestConstraintSystem;
     use pasta_curves::Fp;
@@ -424,18 +430,28 @@ mod test {
     fn test_keccak_f_1600() {
         let mut cs = TestConstraintSystem::<Fp>::new();
 
-        // dummy test input
-        let input: Vec<Boolean> = (0..1600)
-            .map(|i| {
+        let input_bytes: Vec<u8> = b"hello world".to_vec();
+        let mut input_bits: Vec<bool> = bytes_to_bits_le(&input_bytes);
+        input_bits.resize(1600, false);
+
+        let input: Vec<Boolean> = input_bits.iter().enumerate()
+            .map(|(i, &bit)| {
                 Boolean::from(
-                    AllocatedBit::alloc(cs.namespace(|| format!("input bit {}", i)), Some(false))
+                    AllocatedBit::alloc(cs.namespace(|| format!("input bit {}", i)), Some(bit))
                         .unwrap(),
                 )
             })
             .collect();
 
-        let _output = keccak_f_1600::<Fp, _>(cs.namespace(|| "keccak_f_1600"), &input).unwrap();
+        let output = keccak_f_1600(cs.namespace(|| "keccak_f_1600"), &input).unwrap();
+        
+        let expected_output = library_step_sponge(input_bits, None, 1088, true);
+        
+        for (o, &e) in output.iter().zip(expected_output.iter()) {
+            assert_eq!(o.get_value().unwrap(), e, "keccak_f_1600 output mismatch!!");
+        }
 
+        // assert_eq!(output.len(), 1600);
         if !cs.is_satisfied() {
             println!("Unsatisfied constraint: {:?}", cs.which_is_unsatisfied());
         }
@@ -443,6 +459,43 @@ mod test {
 
         println!("keccak_f_1600 constraints: {}", cs.num_constraints());
     }
+
+    #[test]
+    fn test_shake256_inject() {
+        let preimage: Vec<u8> = b"hello world".to_vec();
+
+        let expected_output = library_shake256_inject([false; 1600], preimage.clone());
+
+        let mut cs = TestConstraintSystem::<Fp>::new();
+
+        let preimage_bits: Vec<bool> = bytes_to_bits_le(&preimage);
+
+        let preimage_bools: Vec<Boolean> = preimage_bits
+            .iter()
+            .enumerate()
+            .map(|(i, &bit)| {
+                Boolean::from(
+                    AllocatedBit::alloc(cs.namespace(|| format!("preimage bit {}", i)), Some(bit))
+                        .unwrap(),
+                )
+            })
+            .collect();
+
+        let padded_preimage = shake256_pad101(&preimage);
+        let result = shake256_inject(cs.namespace(|| "shake256 inject"), vec![Boolean::Constant(false); 1600], padded_preimage.into_iter().map(Boolean::Constant).collect(), 1088).unwrap();
+
+        for (o, &e) in result.iter().zip(expected_output.iter()) {
+            assert_eq!(o.get_value().unwrap(), e, "shake256 inject output mismatch!!");
+        }
+
+        if !cs.is_satisfied() {
+            println!("Unsatisfied constraint: {:?}", cs.which_is_unsatisfied());
+        }
+        assert!(cs.is_satisfied(), "Constraint system is not satisfied!");
+
+        println!("shake256 inject constraints: {}", cs.num_constraints());
+    }
+
 
     #[test]
     fn test_shake256_gadget() {
@@ -503,7 +556,6 @@ mod test {
         }
         assert!(cs.is_satisfied(), "Constraint system is not satisfied!");
 
-        println!("SHAKE256 test PASSED!");
         println!("Number of constraints: {}", cs.num_constraints());
     }
 }
