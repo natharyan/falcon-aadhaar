@@ -53,7 +53,7 @@ where
 //             ctx_inject_packed: [Scalar::ZERO; 7],
 //             s2: Polynomial::default(),
 //             c: Polynomial::default(),
-//             h: PublicKey::default(),
+//             h: Polynomial::default(),
 //         }
 //     }
 // }
@@ -84,7 +84,7 @@ where
         let ctx_inject: [bool; 1600] = library_shake256_inject([false; 1600], msg_blocks.iter().flatten().cloned().collect());
         let ctx_inject_bits = ctx_inject.to_vec();
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
-        println!("ctx_inject_packed len: {}", ctx_inject_packed.len());
+        // println!("ctx_inject_packed len: {}", ctx_inject_packed.len());
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
         let hash_inject = inject_hasher.hash(&ctx_inject_packed);
         

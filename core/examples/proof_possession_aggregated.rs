@@ -1,4 +1,8 @@
-use std::time::Instant;
+use std::{
+    fs::File,
+    io::{BufReader, BufWriter},
+    time::Instant,
+};
 
 use clap::Command;
 use falcon_rust::{KeyPair, Polynomial, PublicKey};
@@ -97,37 +101,37 @@ fn main() {
         )
         .unwrap();
 
-    let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
-    for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
-        let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
+    // let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
+    // for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
+    //     let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
         
-        let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
-            .iter()
-            .enumerate()
-            .map(|(j, val)| {
-                AllocatedNum::alloc(
-                    cs.namespace(|| format!("z_{}", j)),
-                    || Ok(*val)
-                ).unwrap()
-            })
-            .collect();
+    //     let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
+    //         .iter()
+    //         .enumerate()
+    //         .map(|(j, val)| {
+    //             AllocatedNum::alloc(
+    //                 cs.namespace(|| format!("z_{}", j)),
+    //                 || Ok(*val)
+    //             ).unwrap()
+    //         })
+    //         .collect();
 
-        let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
+    //     let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
 
-        if !cs.is_satisfied() {
-            println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
-            break;
-        } else {
-            println!("Step {} OK", 
-                i,
-            );
-        }
+    //     if !cs.is_satisfied() {
+    //         println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
+    //         break;
+    //     } else {
+    //         println!("Step {} OK", 
+    //             i,
+    //         );
+    //     }
 
-        z_current = z_next_alloc
-            .iter()
-            .map(|v| v.get_value().unwrap())
-            .collect();
-    }
+    //     z_current = z_next_alloc
+    //         .iter()
+    //         .map(|v| v.get_value().unwrap())
+    //         .collect();
+    // }
 
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
@@ -181,6 +185,19 @@ fn main() {
 
     let compressed_snark = res.unwrap();
 
+    // Persist proof as JSON so it can be stored/retrieved across runs.
+    let proof_json_path = "proof_possession_aggregated.proof.json";
+    let proof_file = File::create(proof_json_path).expect("failed to create JSON proof file");
+    serde_json::to_writer(BufWriter::new(proof_file), &compressed_snark)
+        .expect("failed to serialize proof to JSON");
+    println!("Saved JSON proof to {}", proof_json_path);
+
+    // Load proof back from JSON and use it for verification.
+    let loaded_proof_file = File::open(proof_json_path).expect("failed to open JSON proof file");
+    let loaded_compressed_snark: CompressedSNARK<E1, E2, C1, C2, S1, S2> =
+        serde_json::from_reader(BufReader::new(loaded_proof_file))
+            .expect("failed to deserialize proof from JSON");
+
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     bincode::serialize_into(&mut encoder, &compressed_snark).unwrap();
     let compressed_snark_encoded = encoder.finish().unwrap();
@@ -192,7 +209,7 @@ fn main() {
     // verify the compressed SNARK
     println!("Verifying a CompressedSNARK...");
     let start = Instant::now();
-    let res = compressed_snark.verify(&vk, num_steps, &z0_primary, &z0_secondary);
+    let res = loaded_compressed_snark.verify(&vk, num_steps, &z0_primary, &z0_secondary);
     let verification_time = start.elapsed();
     println!(
         "CompressedSNARK::verify: {:?}, took {:?}",
