@@ -1,7 +1,7 @@
 use std::ops::Mul;
 use std::{alloc::alloc, ops::Add};
 
-use crate::gadgets::ntt::*;
+use crate::ntt::*;
 use crate::hash::shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, SHAKE256_RATE_BYTES, keccak_f_1600, library_step_sponge, shake256_pad101};
 use crate::utils::{bits_to_bytes_le, bytes_to_bits_le, enforce_less_than_q, enforce_less_than_norm_bound, inner_product_mod, mod_q, normalize_half_q, num_to_alloc, select_from_vec_linear};
 use crate::ntt::{ntt_deferred_circuit, inv_ntt_deferred_circuit, ntt, ntt_mult_const_p2};
@@ -197,6 +197,7 @@ where
         let hash_c = z[2].clone();
         let shake_inject_m = z[3].clone();
 
+        // TODO Constrain this on the public io.
         let next_shake_inject_m = AllocatedNum::alloc(
             cs.namespace(|| "next_shake_inject_m alloc"),
             || Ok(self.shake_inject_m),

@@ -1,10 +1,10 @@
+use std::alloc;
 use std::ops::Mul;
-use std::{alloc::alloc, ops::Add};
+use std::{alloc::alloc, ops::{Add,Div}};
 
-use crate::gadgets::{bellpepper_uint64::UInt64, ntt::*};
-use crate::hash::shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, 
-                            SHAKE256_DIGEST_LENGTH_BYTES, SHAKE256_RATE_BYTES, 
-                            keccak_f_1600, library_step_sponge, shake256_pad101};
+// use crate::gadgets::{bellpepper_uint64::UInt64};
+use crate::ntt::*;
+use crate::hash::shake256::{SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, SHAKE256_RATE_BYTES, keccak_f_1600, library_shake256_inject, library_step_sponge, shake256_msg_blocks, shake256_pad101};
 use crate::subarray::var_shift_left;
 use crate::utils::{normalize_coeff, bits_to_bytes_le, bytes_to_bits_le, enforce_less_than_q, 
                     enforce_less_than_norm_bound, inner_product_mod, mod_q, normalize_half_q, 
@@ -13,7 +13,7 @@ use crate::ntt::{ntt_deferred_circuit, inv_ntt_deferred_circuit, ntt, ntt_mult_c
 use crate::age_proof::{COEFF_INDEX_MASK, OP_COEFF_INDEX_FIRST, 
                         OP_COEFF_INDEX_LAST, OP_SHAKE256_ACTIVE, OP_SHAKE256_NO_OP, NUM_OPCODE_BITS};
 
-use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking};
+use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking, pack_bits};
 use bellpepper_core::{boolean::Boolean, num::AllocatedNum, ConstraintSystem, SynthesisError};
 use blstrs::Scalar;
 use falcon_rust::{LOG_N, MODULUS, N, Polynomial, PublicKey, Signature, SIG_L2_BOUND};
@@ -30,68 +30,70 @@ pub struct AggregatedProofOfPossessionCircuit<Scalar>
 where 
     Scalar: PrimeField + PartialOrd,
 {
-    // TODO: check whether to keep l2_norm_sum as public input or not.
     coeff_index: u64,
     l2_norm_sum: u64,
     hash_c: Scalar,
-    hash_s2: Scalar,
-    shake_inject_m_block: Scalar,
-    // io_hash: Scalar,
+    hash_inject: Scalar,
+    ctx_inject_packed: [Scalar; 7],
     s2: Polynomial,
     c: Polynomial,
-    h: Polynomial,
+    h: PublicKey,
 }
 
-impl<Scalar> Default for AggregatedProofOfPossessionCircuit<Scalar> 
-where 
-    Scalar: PrimeField + PartialOrd,
-{
-    fn default() -> Self {
-        Self {
-            coeff_index: 0u64,
-            l2_norm_sum: 0u64,
-            hash_c: Scalar::ZERO,
-            hash_s2: Scalar::ZERO,
-            shake_inject_m_block: Scalar::ZERO,
-            // io_hash: Scalar::ZERO,
-            s2: Polynomial::default(),
-            c: Polynomial::default(),
-            h: Polynomial::default(),
-        }
-    }
-}
+// impl<Scalar> Default for AggregatedProofOfPossessionCircuit<Scalar> 
+// where 
+//     Scalar: PrimeField + PartialOrd,
+// {
+//     fn default() -> Self {
+//         Self {
+//             coeff_index: 0u64,
+//             l2_norm_sum: 0u64,
+//             hash_c: Scalar::ZERO,
+//             hash_inject: Scalar::ZERO,
+//             ctx_inject_packed: [Scalar::ZERO; 7],
+//             s2: Polynomial::default(),
+//             c: Polynomial::default(),
+//             h: PublicKey::default(),
+//         }
+//     }
+// }
 
 impl<Scalar> AggregatedProofOfPossessionCircuit<Scalar>
 where
     Scalar: PrimeFieldBits + PartialOrd,
 {
+    pub fn default(h: PublicKey, s2: Polynomial, c: Polynomial) -> Self {
+        Self {
+            coeff_index: 0u64,
+            l2_norm_sum: 0u64,
+            hash_c: Scalar::ZERO,
+            hash_inject: Scalar::ZERO,
+            ctx_inject_packed: [Scalar::ZERO; 7],
+            s2: s2,
+            c: c,
+            h: h,
+        }
+    }
+
     // calculate z_0
     pub fn calc_initial_primary_circuit_input(msg: &Vec<u8>, sig: &Signature) -> Vec<Scalar> {
         let initial_l2_norm_sum = Scalar::from(0u64);
         let intial_coeff_index = Scalar::from(0u64);
 
-        let msg_bits = shake256_pad101(msg);
-        let padded_msg: Vec<u8> = bits_to_bytes_le(&msg_bits).try_into().unwrap();
-        let shake_inject_m_bytes: [u8; SHAKE256_DIGEST_LENGTH_BYTES] =
-            shake_256(&padded_msg, SHAKE256_DIGEST_LENGTH_BYTES).try_into().unwrap();
-        let shake_inject_m_bits = bytes_to_bits(&shake_inject_m_bytes);
-        let shake_inject_m: Vec<Scalar> = compute_multipacking::<Scalar>(&shake_inject_m_bits);
-        assert_eq!(shake_inject_m.len(), 7);
-        // pack byte array into a field elements for shake_inject_m
-        // println!("length of shake_inject_m: {}", shake_inject_m.len());
+        let msg_blocks:Vec<[u8; 136]> = shake256_msg_blocks(&msg);
+        let ctx_inject: [bool; 1600] = library_shake256_inject([false; 1600], msg_blocks.iter().flatten().cloned().collect());
+        let ctx_inject_bits = ctx_inject.to_vec();
+        let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
+        println!("ctx_inject_packed len: {}", ctx_inject_packed.len());
+        let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
+        let hash_inject = inject_hasher.hash(&ctx_inject_packed);
+        
         let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
-
-        // calculate hash_c and hash_s2
         let c_scalars: Vec<Scalar> = c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
         let hash_c = c_hasher.hash(&c_scalars);
-        // io_hash
-        // let io_hash_scalars = [c_scalars, s2_scalars, vec![initial_l2_norm_sum, intial_coeff_index]].concat();
-        // let io_hash_scalars = [c_scalars, s2_scalars, vec![intial_coeff_index]].concat();
-        // let hasher = PoseidonHasher::<Scalar>::new(io_hash_scalars.len() as u32);
-        // let io_hash = hasher.hash(&io_hash_scalars);
-        // The last scalar corresponds to the current date
-        vec![initial_l2_norm_sum, intial_coeff_index, hash_c, shake_inject_m[0]]
+        
+        vec![initial_l2_norm_sum, intial_coeff_index, hash_c, ctx_inject_packed[0], hash_inject]
     }
 
     // calculate AggregatedProofOfPossessionCircuit for all steps
@@ -109,29 +111,24 @@ where
         let mut l2_norm_sum = 0u64;
         let mut coeff_index = OP_COEFF_INDEX_FIRST;
         let c_scalars = c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
-        let s2_scalars = s2.coeff().iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
         let hash_c = c_hasher.hash(&c_scalars);
-        let s2_hasher = PoseidonHasher::<Scalar>::new(s2_scalars.len() as u32);
-        let hash_s2 = s2_hasher.hash(&s2_scalars);
-
-        let msg_bits = shake256_pad101(msg);
-        let padded_msg: Vec<u8> = bits_to_bytes_le(&msg_bits).try_into().unwrap();
-        let shake_inject_m_bytes: [u8; SHAKE256_DIGEST_LENGTH_BYTES] =
-            shake_256(&padded_msg, SHAKE256_DIGEST_LENGTH_BYTES).try_into().unwrap();
-        let shake_inject_m_bits = bytes_to_bits(&shake_inject_m_bytes);
-        let shake_inject_m: Vec<Scalar> = compute_multipacking::<Scalar>(&shake_inject_m_bits);
-        assert_eq!(shake_inject_m.len(), 7);
+        let msg_blocks:Vec<[u8; 136]> = shake256_msg_blocks(&msg);
+        let ctx_inject: [bool; 1600] = library_shake256_inject([false; 1600], msg_blocks.iter().flatten().cloned().collect());
+        let ctx_inject_bits = ctx_inject.to_vec();
+        let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
+        let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
+        let hash_inject = inject_hasher.hash(&ctx_inject_packed);
 
         aggregated_incremental_falcon.push(Self {
             l2_norm_sum: l2_norm_sum,
             coeff_index: coeff_index,
             hash_c: hash_c,
-            hash_s2: hash_s2,
-            shake_inject_m_block: shake_inject_m[0],
+            ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
+            hash_inject: hash_inject,
             s2: s2.clone(),
             c: c.clone().try_into().unwrap(),
-            h: pk_poly.clone(),
+            h: pk.clone(),
         });
         
         // compute s2*h modulo q
@@ -167,11 +164,11 @@ where
                 l2_norm_sum: l2_norm_sum,
                 coeff_index: coeff_index,
                 hash_c: hash_c,
-                hash_s2: hash_s2,
-                shake_inject_m_block: shake_inject_m[i % shake_inject_m.len()],
+                ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
+                hash_inject: hash_inject,
                 s2: s2.clone(),
                 c: c.clone().try_into().unwrap(),
-                h: pk_poly,
+                h: pk.clone(),
             });
         }
 
@@ -184,7 +181,7 @@ where
     Scalar: PrimeFieldBits + PartialOrd,
 {
     fn arity(&self) -> usize {
-        4
+        5
     }
 
     fn synthesize<CS>(
@@ -193,149 +190,261 @@ where
         z: &[AllocatedNum<Scalar>],
     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
     where
-        CS: ConstraintSystem<Scalar>
-    {   
+        CS: ConstraintSystem<Scalar>,
+    {
+        // ── Unpack public inputs ──────────────────────────────────────────────
         let mut l2_norm_sum_var = z[0].clone();
+        // CRITICAL: snapshot coeff_index BEFORE the k-loop mutates coeff_index_var.
+        // var_shift_left and idx derivation both need the *incoming* z[1].
+        let coeff_index_init    = z[1].clone();
         let mut coeff_index_var = z[1].clone();
-        let hash_c = z[2].clone();
-        let cur_shake_inject_m_block = z[3].clone();
-        // let shake_inject_m = AllocatedNum::alloc(
-        //     cs.namespace(|| "shake_inject_m alloc"),
-        //     || Ok(self.shake_inject_m_block),
-        // )?;
+        let hash_c              = z[2].clone();
+        let cur_shake_block     = z[3].clone();
+        let hash_inject         = z[4].clone();
 
-        let c_scalars = self.c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
-        let s2_scalars = self.s2.coeff().iter().map(|&x| Scalar::from(x as u64)).collect::<Vec<Scalar>>();
-        let c_vars = c_scalars.iter().enumerate().map(|(i,&x)| {
-            AllocatedNum::alloc(cs.namespace(|| format!("alloc c coefficient {}", i)), || {Ok(x)})
-        }).collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
-        // no range check enforced on s2 coefficients as if any s2[i] > q then s2[i]^2 > 12289^2 > SIG_L2_BOUND = 34034726
-        let s2_vars = s2_scalars.iter().enumerate().map(|(i,&x)| {
-            AllocatedNum::alloc(cs.namespace(|| format!("alloc s2 coefficient {}", i)), || {Ok(x)})
-        }).collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
+        // ── Allocate ctx_inject_packed witnesses ──────────────────────────────
+        let ctx_inject_packed_vars = self.ctx_inject_packed.iter().enumerate()
+            .map(|(i, &x)| AllocatedNum::alloc(
+                cs.namespace(|| format!("ctx_inject_packed_{i}")), || Ok(x)))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // enforce H_pos(c) = Hash_c
-        let c_hasher = PoseidonHasher::<Scalar>::new(c_vars.len() as u32);
-        let hpos_c = c_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "poseidon hash c coefficients"),
-            &c_vars,
+        // Bind ctx_inject_packed witnesses to hash_inject (z[4]).
+        // Without this the prover can use any 7-scalar vector and pass per-step
+        // checks while the folded instance uses a different vector.
+        let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed_vars.len() as u32);
+        let hpos_ctx_inject = inject_hasher.hash_in_circuit(
+            &mut cs.namespace(|| "poseidon_ctx_inject"),
+            &ctx_inject_packed_vars,
         )?;
         cs.enforce(
-            || "enforce H_pos(c) == hash_c",
+            || "H_pos(ctx_inject) == hash_inject",
+            |lc| lc + hpos_ctx_inject.get_variable() - hash_inject.get_variable(),
+            |lc| lc + CS::one(),
+            |lc| lc,
+        );
+
+        // ── Allocate c and s2 polynomial witnesses ────────────────────────────
+        let c_scalars: Vec<Scalar>  = self.c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
+        let s2_scalars: Vec<Scalar> = self.s2.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
+
+        let c_vars = c_scalars.iter().enumerate()
+            .map(|(i, &x)| AllocatedNum::alloc(
+                cs.namespace(|| format!("c_{i}")), || Ok(x)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let s2_vars = s2_scalars.iter().enumerate()
+            .map(|(i, &x)| AllocatedNum::alloc(
+                cs.namespace(|| format!("s2_{i}")), || Ok(x)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Bind c witness to hash_c (z[2]) so same c is used across all steps.
+        let c_hasher = PoseidonHasher::<Scalar>::new(c_vars.len() as u32);
+        let hpos_c   = c_hasher.hash_in_circuit(&mut cs.namespace(|| "poseidon_c"), &c_vars)?;
+        cs.enforce(
+            || "H_pos(c) == hash_c",
             |lc| lc + hpos_c.get_variable() - hash_c.get_variable(),
             |lc| lc + CS::one(),
             |lc| lc,
         );
 
-        // no need to enforce hash match for s2 as in each step more than coefficient is used.
-        // let s2_hasher = PoseidonHasher::<Scalar>::new(s2_vars.len() as u32);
-        // let hpos_s2 = s2_hasher.hash_in_circuit(
-        //     &mut cs.namespace(|| "poseidon hash s2 coefficients"),
-        //     &s2_vars,
-        // )?;
-        // cs.enforce(
-        //     || "enforce H_pos(s2) == hash_s2",
-        //     |lc| lc + hpos_s2.get_variable() - hash_s2.get_variable(),
-        //     |lc| lc + CS::one(),
-        //     |lc| lc,
-        // );
+        // ── Rotate-and-window using coeff_index_init (z[1], unchanged by loop) ─
+        // IMPORTANT: use coeff_index_init, not coeff_index_var, so the shift is
+        // the same regardless of loop iteration.
+        let s2_lshifted = var_shift_left(
+            cs.namespace(|| "vsl_s2"), &s2_vars, &coeff_index_init, N, LOG_N)?;
+        let c_lshifted  = var_shift_left(
+            cs.namespace(|| "vsl_c"),  &c_vars,  &coeff_index_init, N, LOG_N)?;
+        let s2_subarray64: Vec<_> = s2_lshifted.iter().take(64).cloned().collect();
+        let c_subarray64:  Vec<_> = c_lshifted .iter().take(64).cloned().collect();
 
-        // No range check needed for c as it configured is a public input
-        
-        let s2_lshifted = var_shift_left(cs.namespace(|| "var_shift_left s2"), &s2_vars, &coeff_index_var, N, LOG_N)?;
-        let c_lshifted = var_shift_left(cs.namespace(|| "var_shift_left c"), &c_vars, &coeff_index_var, N, LOG_N)?;
-        let s2_subarray64 = s2_lshifted.iter().take(64).cloned().collect::<Vec<AllocatedNum<Scalar>>>();
-        let c_subarray64 = c_lshifted.iter().take(64).cloned().collect::<Vec<AllocatedNum<Scalar>>>();
+        // ── NTT multiply s2 · h (mod q) ──────────────────────────────────────
+        let mut sum_aggregated = alloc_constant(
+            cs.namespace(|| "sum_agg_init"), Scalar::ZERO)?;
+        let ntt_s2   = ntt_deferred_circuit(cs.namespace(|| "ntt_s2"), &s2_vars)?;
+        let pk_poly: Polynomial = (&self.h).into();
+        let ntt_h    = ntt(&pk_poly);
+        let ntt_s2h  = ntt_mult_const_p2(cs.namespace(|| "ntt_s2h"), ntt_s2, ntt_h)?;
+        let prod_s2h = inv_ntt_deferred_circuit(cs.namespace(|| "inv_ntt_s2h"), ntt_s2h)?;
+        let prod_s2h = prod_s2h.iter().enumerate()
+            .map(|(i, x)| num_to_alloc(cs.namespace(|| format!("alloc_s2h_{i}")), x))
+            .collect::<Result<Vec<_>, _>>()?;
+        // Use coeff_index_init here too — same reason as above.
+        let prod_s2h_lshifted = var_shift_left(
+            cs.namespace(|| "vsl_s2h"), &prod_s2h, &coeff_index_init, N, LOG_N)?;
+        let prod_s2h_sub64: Vec<_> = prod_s2h_lshifted.iter().take(64).cloned().collect();
+        let prod_s2h_sub64_modq = prod_s2h_sub64.iter().enumerate()
+            .map(|(i, x)| mod_q(cs.namespace(|| format!("modq_s2h_{i}")), x))
+            .collect::<Result<Vec<_>, _>>()?;
 
-        let mut sum_aggregated = alloc_constant(cs.namespace(|| "alloc_constant sum_aggregated = 0"), Scalar::from(0u64))?;
-        let ntt_s2 = ntt_deferred_circuit(cs.namespace(|| "ntt_deferred_circuit s2"), &s2_vars)?;
-        let ntt_h = ntt(&self.h);
-        let ntt_s2h = ntt_mult_const_p2(cs.namespace(|| "ntt_mult_const_p2"), ntt_s2, ntt_h)?;
-        let prod_s2h = inv_ntt_deferred_circuit(cs.namespace(|| "inv_ntt_deferred_circuit s2h"), ntt_s2h)?;
-        let prod_s2h = prod_s2h
-            .iter().enumerate()
-            .map(|(i, x)| num_to_alloc(cs.namespace(|| format!("alloc prod_s2h coeff {}", i)), &x))
-            .collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
-        let prod_s2h_lshifted = var_shift_left(cs.namespace(|| "var_shift_left prod_s2h"), &prod_s2h, &coeff_index_var, N, LOG_N)?;
-        let prod_s2h_subarray64 = prod_s2h_lshifted.iter().take(64).cloned().collect::<Vec<AllocatedNum<Scalar>>>();
-        // reduce each coefficient mod q
-        let prod_s2h_subarray64_modq = prod_s2h_subarray64.iter().enumerate().map(|(i, x)| {
-            let reduced = mod_q(cs.namespace(|| format!("mod_q prod_s2h coeff_{}", i)), x)?;
-            Ok(reduced)
-        }).collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
+        let var1 = alloc_constant(cs.namespace(|| "const_1"), Scalar::ONE)?;
 
-        let var1 = alloc_constant(cs.namespace(|| "alloc_constant 1"), Scalar::from(1u64))?;
-
+        // ── Main loop ─────────────────────────────────────────────────────────
         for k in 0..64 {
-            // constraint s1_coeff
-            let flag_coeff_c_less_s2h = less_than(
-                cs.namespace(|| format!("flag_coeff_c_less_s2h_{}", k)),
+            let flag_c_lt = less_than(
+                cs.namespace(|| format!("c_lt_s2h_{k}")),
                 &c_subarray64[k],
-                &prod_s2h_subarray64_modq[k],
+                &prod_s2h_sub64_modq[k],
                 14,
             )?;
-            let c_lt_s2h = AllocatedNum::alloc(cs.namespace(|| format!("c_lt_s2h_{}", k)), || {
-                let c_coeff_val = c_subarray64[k]
-                    .get_value()
-                    .ok_or(SynthesisError::AssignmentMissing)?;
-                let prod_s2h_coeff_val = prod_s2h_subarray64_modq[k]
-                    .get_value()
-                    .ok_or(SynthesisError::AssignmentMissing)?;
-                Ok(c_coeff_val + Scalar::from(MODULUS as u64) - prod_s2h_coeff_val)
+
+            // Candidate A: c[k] + q - s2h[k]  (used when c < s2h)
+            let c_pq_s2h = AllocatedNum::alloc(cs.namespace(|| format!("c_pq_s2h_{k} alloc")), || {
+                let cv = c_subarray64[k].get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                let sv = prod_s2h_sub64_modq[k].get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                Ok(cv + Scalar::from(MODULUS as u64) - sv)
             })?;
             cs.enforce(
-                || format!("c_lt_s2h = c_coeff + q - prod_s2h_coeff_{}", k),
-                |lc| lc + c_lt_s2h.get_variable() + prod_s2h_subarray64_modq[k].get_variable(),
+                || format!("c_pq_s2h_{k} enforce"),
+                |lc| lc + c_pq_s2h.get_variable() + prod_s2h_sub64_modq[k].get_variable(),
                 |lc| lc + CS::one(),
-                |lc| lc + c_subarray64[k].get_variable() + (Scalar::from(MODULUS as u64), CS::one()),
+                |lc| lc + c_subarray64[k].get_variable()
+                        + (Scalar::from(MODULUS as u64), CS::one()),
             );
-            let c_minus_s2h = AllocatedNum::alloc(cs.namespace(|| format!("c_minus_s2h_{}", k)), || {
-                let c_coeff_val = c_subarray64[k]
-                    .get_value()
-                    .ok_or(SynthesisError::AssignmentMissing)?;
-                let prod_s2h_coeff_val = prod_s2h_subarray64_modq[k]
-                    .get_value()
-                    .ok_or(SynthesisError::AssignmentMissing)?;
-                Ok(c_coeff_val - prod_s2h_coeff_val)
+
+            // Candidate B: c[k] - s2h[k]  (used when c >= s2h)
+            let c_m_s2h = AllocatedNum::alloc(cs.namespace(|| format!("c_m_s2h_{k} alloc")), || {
+                let cv = c_subarray64[k].get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                let sv = prod_s2h_sub64_modq[k].get_value().ok_or(SynthesisError::AssignmentMissing)?;
+                Ok(cv - sv)
             })?;
             cs.enforce(
-                || format!("c_minus_s2h = c_coeff - prod_s2h_coeff_{}", k),
-                |lc| lc + c_minus_s2h.get_variable() + prod_s2h_subarray64_modq[k].get_variable(),
+                || format!("c_m_s2h_{k} enforce"),
+                |lc| lc + c_m_s2h.get_variable() + prod_s2h_sub64_modq[k].get_variable(),
                 |lc| lc + CS::one(),
                 |lc| lc + c_subarray64[k].get_variable(),
             );
+
             let s1_coeff = conditionally_select(
-                cs.namespace(|| format!("s1_coeff conditional select_{}", k)),
-                &c_lt_s2h,
-                &c_minus_s2h,
-                &flag_coeff_c_less_s2h,
+                cs.namespace(|| format!("s1_sel_{k}")),
+                &c_pq_s2h,
+                &c_m_s2h,
+                &flag_c_lt,
             )?;
 
-            // normalize coefficients to [-q/2, q/2] before squaring
-            let s2_normalized = normalize_half_q(&mut cs.namespace(|| format!("normalize s2_{}", k)), &s2_subarray64[k])?;
-            let s2_coeff_sq = s2_normalized.mul(cs.namespace(|| format!("s2_normalized*s2_normalized_{}", k)), &s2_normalized)?;
+            let s2_norm = normalize_half_q(
+                &mut cs.namespace(|| format!("norm_s2_{k}")), &s2_subarray64[k])?;
+            let s2_sq = s2_norm.mul(
+                cs.namespace(|| format!("s2_sq_{k}")), &s2_norm)?;
 
-            // no need to enforce modulo q range check on s1_coeff as both prod_s2h (through ntt multiplication) and c already have coefficients modulo q
-            let s1_normalized = normalize_half_q(&mut cs.namespace(|| format!("normalize s1_{}", k)), &s1_coeff)?;
-            let s1_coeff_sq = s1_normalized.mul(cs.namespace(|| format!("s1_normalized*s1_normalized_{}", k)), &s1_normalized)?;
-            
-            // update l2 norm sum and coeff index
-            let sum_update = s1_coeff_sq.add(cs.namespace(|| format!("s1_coeff^2 + s2_coeff^2_{}", k)), &s2_coeff_sq)?;
-            sum_aggregated = sum_aggregated.add(cs.namespace(|| format!("sum_aggregated = sum_aggregated + sum_update_{}", k)), &sum_update)?;
-            coeff_index_var = coeff_index_var.add(cs.namespace(|| format!("coeff_index = coeff_index + 1_{}", k)), &var1)?;
+            let s1_norm = normalize_half_q(
+                &mut cs.namespace(|| format!("norm_s1_{k}")), &s1_coeff)?;
+            let s1_sq = s1_norm.mul(
+                cs.namespace(|| format!("s1_sq_{k}")), &s1_norm)?;
+
+            let coeff_sum = s1_sq.add(cs.namespace(|| format!("sq_sum_{k}")), &s2_sq)?;
+            sum_aggregated = sum_aggregated.add(
+                cs.namespace(|| format!("agg_upd_{k}")), &coeff_sum)?;
+            coeff_index_var = coeff_index_var.add(
+                cs.namespace(|| format!("ci_inc_{k}")), &var1)?;
         }
-        
-        l2_norm_sum_var = l2_norm_sum_var.add(cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_update"), &sum_aggregated)?;
-        
-        let var_512 = alloc_constant(cs.namespace(|| "alloc_constant 512"), Scalar::from(512u64))?;
-        let flag_coeff = less_than(cs.namespace(|| "flag_coeff"), &coeff_index_var, &var_512, LOG_N + 1)?;
-        
-        // enforce norm bound once all 512 coefficients have been processed
-        let flag_norm_bound = enforce_less_than_norm_bound(cs.namespace(|| "enforce_less_than_norm_bound naive_incremental"), &l2_norm_sum_var)?;
-        let res = Boolean::or(cs.namespace(|| "boolean or flag_coeff flag_norm_bound"), &flag_coeff, &flag_norm_bound)?;
-        Boolean::enforce_equal(cs.namespace(|| "enforce or result is true"), &res, &Boolean::Constant(true))?;
 
-        let z_out = vec![l2_norm_sum_var, coeff_index_var, hash_c, cur_shake_inject_m_block];
-        Ok(z_out)
+        l2_norm_sum_var = l2_norm_sum_var.add(
+            cs.namespace(|| "l2_update"), &sum_aggregated)?;
+
+        // ── Derive step_i = coeff_index_init / 64 as a circuit variable ───────
+        //
+        // FIX: Previously idx was derived from self.coeff_index (witness) and
+        // embedded as a constant via alloc_constant. Constants are baked into the
+        // R1CS *matrix*, not the witness column. Because each step has a different
+        // idx, each step's matrix differs. Nova's folding uses one fixed matrix
+        // (from key-gen). Folding two instances with matrices that differ causes
+        // res_eq: false in is_sat_relaxed even though each step individually passes.
+        //
+        // The fix: allocate step_i as a *witness* (goes into the witness column)
+        // and add a constraint that ties it to the public input coeff_index_init.
+        // Now the matrix is identical across all steps; only the witness differs.
+        let step_i_val = self.coeff_index / 64;   // off-circuit witness hint
+        let step_i = AllocatedNum::alloc(cs.namespace(|| "step_i"), || {
+            Ok(Scalar::from(step_i_val))
+        })?;
+        // Enforce: step_i * 64 = coeff_index_init
+        // This binds step_i (witness) to coeff_index_init (public input z[1]).
+        cs.enforce(
+            || "step_i * 64 = coeff_index_init",
+            |lc| lc + step_i.get_variable(),
+            |lc| lc + (Scalar::from(64u64), CS::one()),
+            |lc| lc + coeff_index_init.get_variable(),
+        );
+        // 3-bit range check: step_i ∈ {0, 1, …, 7}. Prevents the prover from
+        // choosing an arbitrary step_i that satisfies step_i * 64 = coeff_index_init
+        // only modulo the field order.
+        let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
+
+        // ── Compute step_i_mod7 = step_i % 7 in-circuit ───────────────────────
+        // step_i ∈ {0..6} → mod7 = step_i (identity)
+        // step_i = 7       → mod7 = 0       (wrap)
+        let const_zero  = alloc_constant(cs.namespace(|| "const_0"), Scalar::ZERO)?;
+        let const_seven = alloc_constant(cs.namespace(|| "const_7"), Scalar::from(7u64))?;
+
+        let step_eq_7: Boolean = alloc_num_equals_constant(
+            cs.namespace(|| "step_eq_7"),
+            &step_i,
+            Scalar::from(7u64),
+        )?;
+        // If step_i == 7 select 0, otherwise select step_i.
+        let step_i_mod7 = conditionally_select(
+            cs.namespace(|| "step_i_mod7"),
+            &const_zero,   // true branch  (step_i == 7 → 0)
+            &step_i,       // false branch (step_i  < 7 → step_i)
+            &step_eq_7,
+        )?;
+
+        // ── Constrain cur_shake_block == ctx_inject_packed[step_i_mod7] ───────
+        // Algorithm 3 line 12: verifies the shake_block passed in through z[3]
+        // genuinely corresponds to this step's slice of the sponge state.
+        // Using select_from_vec_linear (linear scan, no constant index leakage).
+        let cur_expected = select_from_vec_linear(
+            cs.namespace(|| "sel_cur_shake"),
+            &ctx_inject_packed_vars,
+            &step_i_mod7,
+        )?;
+        cs.enforce(
+            || "cur_shake_block == ctx_inject_packed[step_i_mod7]",
+            |lc| lc + cur_expected.get_variable() - cur_shake_block.get_variable(),
+            |lc| lc + CS::one(),
+            |lc| lc,
+        );
+
+        // ── Compute next_idx = (step_i_mod7 + 1) % 7 in-circuit ──────────────
+        // step_i_mod7 ∈ {0..6}; adding 1 gives {1..7}.
+        // If result == 7 wrap to 0, otherwise keep.
+        let step_plus1 = step_i_mod7.add(cs.namespace(|| "step_plus1"), &var1)?;
+
+        let step_plus1_eq_7: Boolean = alloc_num_equals_constant(
+            cs.namespace(|| "step_plus1_eq_7"),
+            &step_plus1,
+            Scalar::from(7u64),
+        )?;
+        let next_idx = conditionally_select(
+            cs.namespace(|| "next_idx"),
+            &const_zero,    // true  (step_plus1 == 7 → 0)
+            &step_plus1,    // false (step_plus1  < 7 → step_plus1)
+            &step_plus1_eq_7,
+        )?;
+
+        // shake_block_next is z_out[3]: Algorithm 3 lines 29/34.
+        let shake_block_next = select_from_vec_linear(
+            cs.namespace(|| "sel_next_shake"),
+            &ctx_inject_packed_vars,
+            &next_idx,
+        )?;
+
+        // ── Norm bound check ──────────────────────────────────────────────────
+        let var_512 = alloc_constant(cs.namespace(|| "const_512"), Scalar::from(512u64))?;
+        let flag_coeff = less_than(
+            cs.namespace(|| "coeff_lt_512"), &coeff_index_var, &var_512, LOG_N + 1)?;
+        let flag_norm_bound = enforce_less_than_norm_bound(
+            cs.namespace(|| "norm_bound"), &l2_norm_sum_var)?;
+        let res = Boolean::or(
+            cs.namespace(|| "flag_or"), &flag_coeff, &flag_norm_bound)?;
+        Boolean::enforce_equal(
+            cs.namespace(|| "or_is_true"), &res, &Boolean::Constant(true))?;
+
+        Ok(vec![
+            l2_norm_sum_var,
+            coeff_index_var,
+            hash_c,
+            shake_block_next,   // z_out[3]: advances IVC chain through sponge state
+            hash_inject,        // z_out[4]: constant across all steps
+        ])
     }
 }

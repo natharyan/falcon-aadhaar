@@ -1,5 +1,6 @@
 use std::time::Instant;
-
+use std::fs::{File};
+use std::io::BufWriter;
 use clap::Command;
 use falcon_rust::KeyPair;
 use flate2::{write::ZlibEncoder, Compression};
@@ -145,38 +146,6 @@ fn main() {
             &z0_secondary,
         )
         .unwrap();
-
-    // let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
-    // for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
-    //     let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
-        
-    //     let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
-    //         .iter()
-    //         .enumerate()
-    //         .map(|(j, val)| {
-    //             AllocatedNum::alloc(
-    //                 cs.namespace(|| format!("z_{}", j)),
-    //                 || Ok(*val)
-    //             ).unwrap()
-    //         })
-    //         .collect();
-
-    //     let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
-
-    //     if !cs.is_satisfied() {
-    //         println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
-    //         break;
-    //     } else {
-    //         println!("Step {} OK", 
-    //             i,
-    //         );
-    //     }
-
-    //     z_current = z_next_alloc
-    //         .iter()
-    //         .map(|v| v.get_value().unwrap())
-    //         .collect();
-    // }
     
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
@@ -206,7 +175,8 @@ fn main() {
         start.elapsed()
     );
     assert!(res.is_ok());
-
+    // TODO store snark proof in a json file.
+    
     // produce a compressed SNARK
     println!("Generating a CompressedSNARK using Spartan with IPA-PC...");
     let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();
@@ -225,6 +195,11 @@ fn main() {
     println!("Total proving time is {:?}", proving_time);
 
     let compressed_snark = res.unwrap();
+
+    // save compress_snark in json file
+    let file = File::create("compressed_snark.json").unwrap();
+    let writer = BufWriter::new(file);
+    serde_json::to_writer(writer, &compressed_snark).unwrap();
 
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     bincode::serialize_into(&mut encoder, &compressed_snark).unwrap();

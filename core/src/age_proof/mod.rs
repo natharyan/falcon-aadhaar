@@ -118,7 +118,7 @@ where
     Scalar: PrimeFieldBits,
 {
     fn update_nullifier(prev_nullifier: Scalar, l2_norm_sum: u64, ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS], msg_blocks: &Vec<[u8; 136]>) -> Scalar {
-        let ctx_inject = library_shake256_inject([false; 1600], msg_blocks.iter().flatten().cloned().collect());
+        let ctx_inject: [bool; 1600] = library_shake256_inject([false; 1600], msg_blocks.iter().flatten().cloned().collect());
         let ctx_inject_scalars = ctx_inject.iter().map(|&b| if b {Scalar::from(1u64)} else {Scalar::from(0u64)}).collect::<Vec<Scalar>>();
         let ctx_absorb_scalars = ctx_absorb.iter().map(|&b| if b {Scalar::from(1u64)} else {Scalar::from(0u64)}).collect::<Vec<Scalar>>();
         let mut absorb_inject_norm_preimage = ctx_inject_scalars.clone();
@@ -243,15 +243,6 @@ where
         .unwrap();
 
         prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &msg_blocks);
-
-        // compress256(
-        //     &mut sha256_state,
-        //     &[*GenericArray::from_slice(&sha256_msg_blocks[0])],
-        // );
-        // compress256(
-        //     &mut sha256_state,
-        //     &[*GenericArray::from_slice(&sha256_msg_blocks[1])],
-        // );
 
         let num_blocks = msg_blocks.len();
         println!("Number of SHAKE256 blocks: {}", num_blocks);

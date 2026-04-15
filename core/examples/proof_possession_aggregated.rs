@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use clap::Command;
-use falcon_rust::KeyPair;
+use falcon_rust::{KeyPair, Polynomial, PublicKey};
 use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
 
@@ -41,8 +41,12 @@ fn main() {
         .secret_key
         .sign_with_seed("test seed".as_ref(), msg.as_ref());
     assert!(keypair.public_key.verify(msg.as_ref(), &sig));
+    let h: PublicKey = keypair.public_key;
+    let s2: Polynomial = (&sig).into();
+    let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
+
     
-    let circuit_primary: C1 = AggregatedProofOfPossessionCircuit::default();
+    let circuit_primary: C1 = AggregatedProofOfPossessionCircuit::default(h, s2, c);
     let circuit_secondary: C2 = TrivialCircuit::default();
 
     let param_gen_timer = Instant::now();
