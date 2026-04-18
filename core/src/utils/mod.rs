@@ -2,23 +2,25 @@ use std::alloc;
 
 use crate::age_proof::NUM_COEFF_INDEX_BITS;
 use crate::hash::shake256::SHAKE256_BLOCK_LENGTH_BYTES;
-use bellpepper::gadgets::{multipack::bytes_to_bits,boolean::AllocatedBit,num::Num};
-use bellpepper_core::boolean::{Boolean};
+use bellpepper::gadgets::{boolean::AllocatedBit, multipack::bytes_to_bits, num::Num};
+use bellpepper_core::boolean::Boolean;
 
 use bellpepper_core::num::AllocatedNum;
-use bellpepper_core::{ConstraintSystem, SynthesisError, LinearCombination};
+use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError};
 use blstrs::Scalar;
 use clap::error;
-use falcon_rust::{MODULUS, SIG_L2_BOUND, N, Polynomial, PublicKey};
+use falcon_rust::{Polynomial, PublicKey, MODULUS, N, SIG_L2_BOUND};
 use ff::{PrimeField, PrimeFieldBits};
 use keccak::f1600;
-use nova_aadhaar_qr::util::{alloc_constant, alloc_num_equals, check_decomposition, conditionally_select, num_to_bits};
-use sha3::{
-    Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
+use nova_aadhaar_qr::util::{
+    alloc_constant, alloc_num_equals, check_decomposition, conditionally_select, num_to_bits,
 };
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
+use sha3::{
+    digest::{ExtendableOutput, Update, XofReader},
+    Shake256,
+};
 
 /// Convert bytes to little-endian bits
 pub(crate) fn bytes_to_bits_le(bytes: &[u8]) -> Vec<bool> {
@@ -83,9 +85,9 @@ pub(crate) fn arr_u64_to_vec_bool(input: &[u64; 25]) -> [bool; 1600] {
 /// Generate the variable b = a mod 12289;
 pub(crate) fn mod_q<Scalar, CS>(
     mut cs: CS,
-    a: &AllocatedNum<Scalar>
+    a: &AllocatedNum<Scalar>,
 ) -> Result<AllocatedNum<Scalar>, SynthesisError>
-where 
+where
     Scalar: PrimeField + ff::PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
@@ -100,7 +102,7 @@ where
     // so we do not have any overflows
 
     // rebuild the field elements
-    let a_val:Scalar = a.get_value().unwrap_or(Scalar::ONE);
+    let a_val: Scalar = a.get_value().unwrap_or(Scalar::ONE);
 
     let a_int: BigUint = BigUint::from_bytes_le(a_val.to_repr().as_ref());
 
@@ -131,9 +133,9 @@ where
         |lc| lc + (Scalar::from(MODULUS as u64), CS::one()),
         |lc| lc + a.get_variable() - b_var.get_variable(),
     );
-    
+
     // (2) b < 12289
-    enforce_less_than_q(cs.namespace(|| "enforce_less_than_q mod_q"),&b_var)?;
+    enforce_less_than_q(cs.namespace(|| "enforce_less_than_q mod_q"), &b_var)?;
 
     Ok(b_var)
 }
@@ -178,11 +180,7 @@ where
         .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
 
     // Enforce decomposition: a = sum(2^i * bit_i)
-    check_decomposition(
-        cs.namespace(|| "enforce_decompose"),
-        a,
-        a_bit_vars.clone(),
-    )?;
+    check_decomposition(cs.namespace(|| "enforce_decompose"), a, a_bit_vars.clone())?;
 
     // Compute OR(bits[0..11])
     let mut lower_bits_or = Boolean::Constant(false);
@@ -226,8 +224,6 @@ where
     Ok(())
 }
 
-
-
 // Referenced from https://github.com/zhenfeizhang/falcon.rs/blob/master/falcon-r1cs/src/gadgets/arithmetics.rs#L157
 /// Generate the variable c = a * b mod 12289;
 /// with a guarantee that the inputs a and b satisfies:
@@ -256,8 +252,8 @@ where
     // so we do not have any overflows
 
     // rebuild the field elements
-    let a_val:Scalar = a.get_value().unwrap_or(Scalar::ONE);
-    let b_val:Scalar = b.get_value().unwrap_or(Scalar::ONE);
+    let a_val: Scalar = a.get_value().unwrap_or(Scalar::ONE);
+    let b_val: Scalar = b.get_value().unwrap_or(Scalar::ONE);
 
     let ab_val = a_val * b_val;
     let ab_int: BigUint = BigUint::from_bytes_le(ab_val.to_repr().as_ref());
@@ -269,8 +265,8 @@ where
     // cast the variables
     let t_val = Scalar::from(t_int.to_u64().unwrap());
     let c_val = Scalar::from(c_int.to_u64().unwrap());
-    
-    let t_var = AllocatedNum::alloc(cs.namespace(||"t"), || Ok(t_val))?;
+
+    let t_var = AllocatedNum::alloc(cs.namespace(|| "t"), || Ok(t_val))?;
     let c_var = AllocatedNum::alloc(cs.namespace(|| "c"), || Ok(c_val))?;
 
     // (1) a * b - t * 12289 = c
@@ -288,7 +284,7 @@ where
 
     // (2) c < 12289
     enforce_less_than_q(cs.namespace(|| "enforce_less_than_q"), &c_var)?;
-    
+
     Ok(c_var)
 }
 
@@ -299,38 +295,48 @@ where
 pub(crate) fn select_from_vector_512<Scalar, CS>(
     mut cs: CS,
     vec: &[AllocatedNum<Scalar>],
-    idx: &AllocatedNum<Scalar>
+    idx: &AllocatedNum<Scalar>,
 ) -> Result<AllocatedNum<Scalar>, SynthesisError>
-where 
+where
     Scalar: PrimeField + ff::PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
     // assert_eq!(vec.len(), 512, "select_from_vector_mux_512 only supports vectors of length 512");
 
-    let idx_bits = num_to_bits(cs.namespace(||" coeff_index bits"), idx, NUM_COEFF_INDEX_BITS as usize)?;
+    let idx_bits = num_to_bits(
+        cs.namespace(|| " coeff_index bits"),
+        idx,
+        NUM_COEFF_INDEX_BITS as usize,
+    )?;
 
     let mut layer = vec.to_vec();
-    
+
     // binary mux tree with 9 levels
     for (_, bit) in idx_bits.iter().enumerate() {
         let mut next = Vec::with_capacity(layer.len() / 2);
         for j in 0..(layer.len() / 2) {
-            let selected = conditionally_select(cs.namespace(|| "mux level"), &layer[2*j + 1],
-                &layer[2*j],
-                bit)?;
+            let selected = conditionally_select(
+                cs.namespace(|| "mux level"),
+                &layer[2 * j + 1],
+                &layer[2 * j],
+                bit,
+            )?;
             next.push(selected);
         }
         // eliminate half of the elements in the current layer in each iteration
         layer = next;
     }
-    assert!(layer.len() == 1, "After mux tree traversal, only one element should remain");
+    assert!(
+        layer.len() == 1,
+        "After mux tree traversal, only one element should remain"
+    );
     Ok(layer[0].clone())
 }
 
 pub(crate) fn select_from_vec_linear<Scalar, CS>(
     mut cs: CS,
     input: &[AllocatedNum<Scalar>],
-    idx: &AllocatedNum<Scalar>
+    idx: &AllocatedNum<Scalar>,
 ) -> Result<AllocatedNum<Scalar>, SynthesisError>
 where
     Scalar: PrimeField + ff::PrimeFieldBits,
@@ -338,9 +344,20 @@ where
 {
     let mut selected = AllocatedNum::alloc(cs.namespace(|| "selected"), || Ok(Scalar::ZERO))?;
     for (i, elem) in input.iter().enumerate() {
-        let idx_i = AllocatedNum::alloc(cs.namespace(|| format!("idx_{}", i)), || Ok(Scalar::from(i as u64)))?;
-        let is_selected = alloc_num_equals(cs.namespace(|| format!("is idx {i} selected")), &idx, &idx_i)?;
-        selected = conditionally_select(cs.namespace(|| format!("select elem {}", i)), elem, &selected, &is_selected)?;
+        let idx_i = AllocatedNum::alloc(cs.namespace(|| format!("idx_{}", i)), || {
+            Ok(Scalar::from(i as u64))
+        })?;
+        let is_selected = alloc_num_equals(
+            cs.namespace(|| format!("is idx {i} selected")),
+            &idx,
+            &idx_i,
+        )?;
+        selected = conditionally_select(
+            cs.namespace(|| format!("select elem {}", i)),
+            elem,
+            &selected,
+            &is_selected,
+        )?;
     }
     Ok(selected)
 }
@@ -352,7 +369,8 @@ where
 /// * b_i < 12289
 /// Cost: 29 + a.len() constraints
 /// TODO: for inner product, keep buff_pk_poly as vec<vec<Scalar>> as table for each index i = 0..512 use select_from_vector_512 to select the correct vector for coeff_index
-pub(crate) fn inner_product_mod<Scalar, CS>( // TODO
+pub(crate) fn inner_product_mod<Scalar, CS>(
+    // TODO
     mut cs: CS,
     a: &[AllocatedNum<Scalar>],
     b: &[AllocatedNum<Scalar>],
@@ -379,15 +397,21 @@ where
     // also note that this method is slightly more efficient
     // than calling mul_mod iteratively
 
-    let a_val = a.iter().map(|var| var.get_value().unwrap_or(Scalar::ONE)).collect::<Vec<Scalar>>();
-    let b_val = b.iter().map(|var| var.get_value().unwrap_or(Scalar::ONE)).collect::<Vec<Scalar>>();
+    let a_val = a
+        .iter()
+        .map(|var| var.get_value().unwrap_or(Scalar::ONE))
+        .collect::<Vec<Scalar>>();
+    let b_val = b
+        .iter()
+        .map(|var| var.get_value().unwrap_or(Scalar::ONE))
+        .collect::<Vec<Scalar>>();
 
     let mut ab_val = a_val[0] * b_val[0];
     for (&a_i, &b_i) in a_val.iter().zip(b_val.iter()).skip(1) {
-        ab_val += a_i*b_i;
+        ab_val += a_i * b_i;
     }
     let ab_int: BigUint = BigUint::from_bytes_le(ab_val.to_repr().as_ref());
-    
+
     let modulus_int: BigUint = BigUint::from(MODULUS as u64);
     let t_int = &ab_int / &modulus_int;
     let c_int = &ab_int % &modulus_int;
@@ -413,7 +437,7 @@ where
         || "inner product mod relation",
         |lc| lc + ab_var.get_variable() - tq.get_variable(),
         |lc| lc + CS::one(),
-        |lc| lc + c_var.get_variable()
+        |lc| lc + c_var.get_variable(),
     );
 
     enforce_less_than_q(cs, &c_var)?;
@@ -429,10 +453,9 @@ where
     Scalar: PrimeField + PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
-    let num_var = AllocatedNum::alloc(
-        cs.namespace(|| "num_to_alloc"),
-        || num.get_value().ok_or(SynthesisError::AssignmentMissing),
-    )?;
+    let num_var = AllocatedNum::alloc(cs.namespace(|| "num_to_alloc"), || {
+        num.get_value().ok_or(SynthesisError::AssignmentMissing)
+    })?;
     cs.enforce(
         || "enforce num to allocnum",
         |lc| lc + &num.lc(Scalar::ONE),
@@ -442,10 +465,7 @@ where
     Ok(num_var)
 }
 
-pub(crate) fn kary_or<Scalar, CS>(
-    mut cs: CS,
-    bits: &[Boolean],
-) -> Result<Boolean, SynthesisError>
+pub(crate) fn kary_or<Scalar, CS>(mut cs: CS, bits: &[Boolean]) -> Result<Boolean, SynthesisError>
 where
     Scalar: PrimeField,
     CS: ConstraintSystem<Scalar>,
@@ -458,10 +478,7 @@ where
     Ok(acc)
 }
 
-pub(crate) fn kary_and<Scalar, CS>(
-   mut cs: CS,
-    bits: &[Boolean],
-) -> Result<Boolean, SynthesisError>
+pub(crate) fn kary_and<Scalar, CS>(mut cs: CS, bits: &[Boolean]) -> Result<Boolean, SynthesisError>
 where
     Scalar: PrimeField,
     CS: ConstraintSystem<Scalar>,
@@ -480,10 +497,10 @@ where
 pub(crate) fn enforce_less_than_norm_bound<CS, Scalar>(
     mut cs: CS,
     a: &AllocatedNum<Scalar>,
-) -> Result<Boolean, SynthesisError> 
-where 
-CS: ConstraintSystem<Scalar>,
-Scalar: PrimeField + PrimeFieldBits + PartialOrd,
+) -> Result<Boolean, SynthesisError>
+where
+    CS: ConstraintSystem<Scalar>,
+    Scalar: PrimeField + PrimeFieldBits + PartialOrd,
 {
     // the norm bound is 0b10000001110101010000100110 which is 26 bits, i.e.,
     // 2^25 + 2^18 + 2^17 + 2^16 + 2^14 + 2^ 12 + 2^10 + 2^5 + 2^2 + 2
@@ -495,7 +512,6 @@ Scalar: PrimeField + PrimeFieldBits + PartialOrd,
     if a_val >= Scalar::from(SIG_L2_BOUND) {
         panic!("Invalid input to enforce_less_than_norm_bound");
     }
-
 
     let a_bits = bytes_to_bits_le(a_val.to_repr().as_ref());
     // a_bit_vars is the least 26 bits of a
@@ -513,7 +529,11 @@ Scalar: PrimeField + PrimeFieldBits + PartialOrd,
         .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
 
     // ensure that a_bits are the bit decomposition of a
-    check_decomposition(cs.namespace(|| "check_decomposition enforce_less_than_norm_bound"), a, a_bit_vars.clone())?;
+    check_decomposition(
+        cs.namespace(|| "check_decomposition enforce_less_than_norm_bound"),
+        a,
+        a_bit_vars.clone(),
+    )?;
 
     let kary_or_19_24 = kary_or(cs.namespace(|| "kary_or_19_24"), &a_bit_vars[19..25])?.not();
     let kary_and_16_18 = kary_and(cs.namespace(|| "kary_and_16_18"), &a_bit_vars[16..19])?.not();
@@ -546,18 +566,17 @@ Scalar: PrimeField + PrimeFieldBits + PartialOrd,
     let or_16_18 = Boolean::or(cs.namespace(|| "or_16_18"), &kary_and_16_18, &and_15)?; // - either one of a[16..18] == 0
     let and_19_24 = Boolean::and(cs.namespace(|| "and_19_24"), &kary_or_19_24, &or_16_18)?; // - a[25] == 1 and a[19..24] == 0 and
     let res = Boolean::or(cs.namespace(|| "or_25"), &a_bit_vars[25].not(), &and_19_24)?; // - a[25] == 0 or
-    // Boolean::enforce_equal(cs.namespace(|| "enforce less than norm bound"), &res, &Boolean::Constant(true))?;
+                                                                                         // Boolean::enforce_equal(cs.namespace(|| "enforce less than norm bound"), &res, &Boolean::Constant(true))?;
 
     Ok(res)
 }
 
 /// Return a variable indicating if the input is less than 6144 or not
 /// Cost: 18 constraints.
-/// (This improves the range proof of 1264 constraints as in Arkworks.)
 pub(crate) fn is_less_than_6144<CS, Scalar>(
     cs: &mut CS,
     a: &AllocatedNum<Scalar>,
-) -> Result<Boolean, SynthesisError> 
+) -> Result<Boolean, SynthesisError>
 where
     CS: ConstraintSystem<Scalar>,
     Scalar: PrimeField + PrimeFieldBits + PartialOrd,
@@ -585,7 +604,11 @@ where
         .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
 
     // ensure that a_bits are the bit decomposition of a
-    check_decomposition(cs.namespace(|| "enforce_decomposition_is_less_than_6144"), a, a_bit_vars.clone())?;
+    check_decomposition(
+        cs.namespace(|| "enforce_decomposition_is_less_than_6144"),
+        a,
+        a_bit_vars.clone(),
+    )?;
 
     // argue that a < 6144 = 2^12 + 2^11 via the following:
     // - a[13] == 0 and
@@ -611,6 +634,7 @@ where
     Ok(res)
 }
 
+// normalize to [-q/2,q/2] over unsigned representatives, if a >= 6144, return 12289 - a; otherwise return a
 pub(crate) fn normalize_half_q<CS, Scalar>(
     cs: &mut CS,
     a: &AllocatedNum<Scalar>,
@@ -623,9 +647,7 @@ where
     let modulus_var = alloc_constant(cs.namespace(|| "modulus"), modulus_scalar)?;
 
     let modulus_minus_a = AllocatedNum::alloc(cs.namespace(|| "modulus_minus_a"), || {
-        let a_val = a
-            .get_value()
-            .ok_or(SynthesisError::AssignmentMissing)?;
+        let a_val = a.get_value().ok_or(SynthesisError::AssignmentMissing)?;
         Ok(modulus_scalar - a_val)
     })?;
     cs.enforce(
@@ -635,16 +657,16 @@ where
         |lc| lc + modulus_var.get_variable(),
     );
 
-    let flag_less_than_q = is_less_than_6144(cs, a)?;
+    let flag_less_than_half_q = is_less_than_6144(cs, a)?;
     conditionally_select(
         cs.namespace(|| "normalize_half_q"),
         a,
         &modulus_minus_a,
-        &flag_less_than_q,
+        &flag_less_than_half_q,
     )
 }
 
-// normalize coefficient in [0,q] to the range [-q/2, q/2]
+// normalize coefficient in [0,q] to the range [-q/2, q/2] over unsigned representatives, if a >= 6144, return 12289 - a; otherwise return a
 pub(crate) fn normalize_coeff(val: i64) -> u64 {
     let modulus = MODULUS as i64;
     let normalized = if val > modulus / 2 {
@@ -653,4 +675,49 @@ pub(crate) fn normalize_coeff(val: i64) -> u64 {
         val as u64
     };
     normalized
+}
+
+/// Takes a sequence of booleans and exposes them as compact Nums per field-capacity chunk (little-endian)
+/// bits = ctx_absorb
+pub(crate) fn pack_bits_scalars<Scalar, CS>(
+    mut cs: CS,
+    bits: &[Boolean],
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
+where
+    Scalar: PrimeField,
+    CS: ConstraintSystem<Scalar>,
+{
+    if bits.len() != 1600 {
+        return Err(SynthesisError::Unsatisfiable);
+    }
+
+    let mut packed = Vec::with_capacity(
+        (bits.len() + (Scalar::CAPACITY as usize) - 1) / (Scalar::CAPACITY as usize),
+    );
+
+    for (chunk_idx, bit_group) in bits.chunks(Scalar::CAPACITY as usize).enumerate() {
+        let mut num = Num::<Scalar>::zero();
+        let mut coeff = Scalar::ONE;
+
+        for bit in bit_group {
+            num = num.add_bool_with_coeff(CS::one(), bit, coeff);
+            coeff = coeff.double();
+        }
+
+        let alloc_num = AllocatedNum::alloc(cs.namespace(|| format!("input_{chunk_idx}")), || {
+            num.get_value().ok_or(SynthesisError::AssignmentMissing)
+        })?;
+
+        // num * 1 = packed_chunk
+        cs.enforce(
+            || format!("packing constraint {chunk_idx}"),
+            |_| num.lc(Scalar::ONE),
+            |lc| lc + CS::one(),
+            |lc| lc + alloc_num.get_variable(),
+        );
+
+        packed.push(alloc_num);
+    }
+
+    Ok(packed)
 }

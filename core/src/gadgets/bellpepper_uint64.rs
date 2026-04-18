@@ -504,9 +504,9 @@ impl fmt::Debug for UInt64 {
 mod test {
     use super::UInt64;
     use bellpepper::gadgets::multieq::MultiEq;
-    use bellpepper_core::ConstraintSystem;
     use bellpepper_core::boolean::Boolean;
     use bellpepper_core::test_cs::TestConstraintSystem;
+    use bellpepper_core::ConstraintSystem;
 
     use bitvec::prelude::*;
     use blstrs::Scalar as Fr;

@@ -1,7 +1,7 @@
 // Referenced from nova-aadhaar-qr create, modified to handle 136 byte blocks of qr code data
 
 use bellpepper_core::{
-    ConstraintSystem, LinearCombination, SynthesisError, boolean::Boolean, num::AllocatedNum,
+    boolean::Boolean, num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError,
 };
 use ff::{PrimeField, PrimeFieldBits};
 

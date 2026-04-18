@@ -10,9 +10,13 @@ use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
 
 use falcon_aadhaar::{
-    age_proof::OP_CODE_LAST, proof_possession_incremental::{AggregatedProofOfPossessionCircuit}
+    age_proof::OP_CODE_LAST, proof_possession_incremental::AggregatedProofOfPossessionCircuit,
 };
 
+use bellpepper_core::num::AllocatedNum;
+use bellpepper_core::test_cs::TestConstraintSystem;
+use bellpepper_core::ConstraintSystem;
+use nova_snark::traits::circuit::StepCircuit;
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
     traits::{circuit::TrivialCircuit, snark::RelaxedR1CSSNARKTrait, Engine},
@@ -23,10 +27,6 @@ use zlib_rs::{
     inflate::{uncompress_slice, InflateConfig},
     ReturnCode,
 };
-use bellpepper_core::ConstraintSystem;
-use bellpepper_core::test_cs::TestConstraintSystem;
-use bellpepper_core::num::AllocatedNum;
-use nova_snark::traits::circuit::StepCircuit;
 
 type E1 = PallasEngine;
 type E2 = VestaEngine;
@@ -38,7 +38,6 @@ type C1 = AggregatedProofOfPossessionCircuit<<E1 as Engine>::Scalar>;
 type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
 
 fn main() {
-
     let keypair = KeyPair::keygen();
     let msg = "testing message";
     let sig = keypair
@@ -49,7 +48,6 @@ fn main() {
     let s2: Polynomial = (&sig).into();
     let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
 
-    
     let circuit_primary: C1 = AggregatedProofOfPossessionCircuit::default(h, s2, c);
     let circuit_secondary: C2 = TrivialCircuit::default();
 
@@ -83,7 +81,8 @@ fn main() {
         pp.num_variables().1
     );
 
-    let primary_circuit_sequence = C1::new_state_sequence(&msg.as_bytes().to_vec(), &sig,keypair.public_key);
+    let primary_circuit_sequence =
+        C1::new_state_sequence(&msg.as_bytes().to_vec(), &sig, keypair.public_key);
 
     let z0_primary = C1::calc_initial_primary_circuit_input(&msg.as_bytes().to_vec(), &sig);
     let z0_secondary = vec![<E2 as Engine>::Scalar::zero()];
@@ -104,7 +103,7 @@ fn main() {
     // let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
     // for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
     //     let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
-        
+
     //     let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
     //         .iter()
     //         .enumerate()
@@ -122,7 +121,7 @@ fn main() {
     //         println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
     //         break;
     //     } else {
-    //         println!("Step {} OK", 
+    //         println!("Step {} OK",
     //             i,
     //         );
     //     }
@@ -136,7 +135,7 @@ fn main() {
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
         let step_start = Instant::now();
-        
+
         let res = recursive_snark.prove_step(&pp, circuit_primary, &circuit_secondary);
         assert!(res.is_ok());
         println!(

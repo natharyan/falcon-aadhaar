@@ -1,17 +1,17 @@
 /// Test to verify that DOB constraints pass with qr.png
 use bellpepper::gadgets::multipack::bytes_to_bits;
 use bellpepper_core::{
-    ConstraintSystem,
     boolean::{AllocatedBit, Boolean},
     test_cs::TestConstraintSystem,
+    ConstraintSystem,
 };
 use falcon_rust::{KeyPair, Signature};
 use image;
 use num_bigint::BigInt;
 use pasta_curves::Fp;
 use zlib_rs::{
+    inflate::{uncompress_slice, InflateConfig},
     ReturnCode,
-    inflate::{InflateConfig, uncompress_slice},
 };
 
 use falcon_aadhaar::dob::{calculate_age_in_years, get_day_month_year_conditional};

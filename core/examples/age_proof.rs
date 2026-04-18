@@ -1,27 +1,29 @@
-use std::time::Instant;
-use std::fs::{File};
-use std::io::BufWriter;
+use bellpepper_core::num::AllocatedNum;
+use bellpepper_core::test_cs::TestConstraintSystem;
+use bellpepper_core::ConstraintSystem;
 use clap::Command;
+use falcon_aadhaar::{
+    age_proof::AadhaarAgeProofCircuit,
+    age_proof::OP_CODE_LAST,
+    qr::{parse_aadhaar_qr_data, AadhaarQRData},
+};
 use falcon_rust::KeyPair;
 use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
-use falcon_aadhaar::{
-    age_proof::OP_CODE_LAST, age_proof::AadhaarAgeProofCircuit, qr::{parse_aadhaar_qr_data, AadhaarQRData}
-};
+use nova_snark::traits::circuit::StepCircuit;
 use nova_snark::{
     provider::{PallasEngine, VestaEngine},
     traits::{circuit::TrivialCircuit, snark::RelaxedR1CSSNARKTrait, Engine},
     CompressedSNARK, PublicParams, RecursiveSNARK,
 };
 use num_bigint::BigInt;
+use std::fs::File;
+use std::io::BufWriter;
+use std::time::Instant;
 use zlib_rs::{
     inflate::{uncompress_slice, InflateConfig},
     ReturnCode,
 };
-use bellpepper_core::ConstraintSystem;
-use bellpepper_core::test_cs::TestConstraintSystem;
-use bellpepper_core::num::AllocatedNum;
-use nova_snark::traits::circuit::StepCircuit;
 
 fn main() {
     let cmd = Command::new("Aadhaar-based Proof of 18+ Age")
@@ -129,9 +131,17 @@ fn main() {
         "Number of bytes in QR code: {}",
         aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
     );
-    let primary_circuit_sequence = C1::new_state_sequence(&aadhaar_qr_data, &aadhaar_qr_data.falcon_sig, aadhaar_qr_data.pk);
+    let primary_circuit_sequence = C1::new_state_sequence(
+        &aadhaar_qr_data,
+        &aadhaar_qr_data.falcon_sig,
+        aadhaar_qr_data.pk,
+    );
 
-    let z0_primary = C1::calc_initial_primary_circuit_input(current_date_bytes, &aadhaar_qr_data.signed_data, &aadhaar_qr_data.falcon_sig); // initial_opcode, current_date_scalar
+    let z0_primary = C1::calc_initial_primary_circuit_input(
+        current_date_bytes,
+        &aadhaar_qr_data.signed_data,
+        &aadhaar_qr_data.falcon_sig,
+    ); // initial_opcode, current_date_scalar
     let z0_secondary = vec![<E2 as Engine>::Scalar::zero()];
 
     let proof_gen_timer = Instant::now();
@@ -146,7 +156,7 @@ fn main() {
             &z0_secondary,
         )
         .unwrap();
-    
+
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
         let step_start = Instant::now();
@@ -176,7 +186,7 @@ fn main() {
     );
     assert!(res.is_ok());
     // TODO store snark proof in a json file.
-    
+
     // produce a compressed SNARK
     println!("Generating a CompressedSNARK using Spartan with IPA-PC...");
     let (pk, vk) = CompressedSNARK::<_, _, _, _, S1, S2>::setup(&pp).unwrap();

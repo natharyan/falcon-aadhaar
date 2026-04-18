@@ -1,4 +1,4 @@
-pub mod naive;
 pub mod aggregated;
-pub use naive::NaiveProofOfPossessionCircuit;
+pub mod naive;
 pub use aggregated::AggregatedProofOfPossessionCircuit;
+pub use naive::NaiveProofOfPossessionCircuit;

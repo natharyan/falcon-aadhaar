@@ -1,10 +1,10 @@
-pub mod age_proof;
-pub mod proof_possession_incremental;
-pub mod ntt;
-mod utils;
-mod gadgets;
 mod aadhaar;
+pub mod age_proof;
+mod gadgets;
 mod hash;
+pub mod ntt;
+pub mod proof_possession_incremental;
+mod utils;
 
-pub use gadgets::*;
 pub use aadhaar::*;
+pub use gadgets::*;

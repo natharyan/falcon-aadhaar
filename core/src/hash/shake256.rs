@@ -3,21 +3,18 @@
 // Bellpepper implementation of https://github.com/natharyan/arkworks-keccak/blob/main/src/constraints.rs for shake256
 
 use crate::gadgets::bellpepper_uint64::UInt64;
-use crate::utils::{
-    arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le,
-    vec_bool_to_arr_u64,
-};
+use crate::utils::{arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le, vec_bool_to_arr_u64};
 use bellpepper::gadgets::multipack::bytes_to_bits;
+use bellpepper_core::boolean::Boolean;
 use bellpepper_core::ConstraintSystem;
 use bellpepper_core::SynthesisError;
-use bellpepper_core::boolean::Boolean;
-use proptest::{bits, strategy};
-use keccak::f1600;
-use sha3::{
-    Digest, Keccak256, Sha3_256, Shake128, Shake256,
-    digest::{ExtendableOutput, Update, XofReader},
-};
 use ff::PrimeFieldBits;
+use keccak::f1600;
+use proptest::{bits, strategy};
+use sha3::{
+    digest::{ExtendableOutput, Update, XofReader},
+    Digest, Keccak256, Sha3_256, Shake128, Shake256,
+};
 
 pub(crate) const SHAKE256_BLOCK_LENGTH_BITS: usize = 1088;
 pub(crate) const SHAKE256_BLOCK_LENGTH_BYTES: usize = 136;
@@ -70,7 +67,9 @@ fn add_shake256_padding(input: Vec<bool>) -> Vec<bool> {
 }
 
 /// apply shake256.pad101 and split into blocks of size r = 1088 bits
-pub(crate) fn shake256_msg_block_sequence(input: Vec<bool>) -> Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> {
+pub(crate) fn shake256_msg_block_sequence(
+    input: Vec<bool>,
+) -> Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> {
     let padded_input = add_shake256_padding(input);
     assert!(padded_input.len() % SHAKE256_BLOCK_LENGTH_BITS == 0);
     let shake256_msg_blocks: Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> = padded_input
@@ -87,6 +86,7 @@ pub(crate) fn library_step_sponge(
     r: usize,
     flag: bool,
 ) -> [bool; 1600] {
+    assert!(state.len() == 1600, "library_step_sponge: State must be of length 1600 bits");
     // absorption step
     if !flag {
         if let Some(m_i_bits) = m_i {
@@ -241,7 +241,10 @@ where
     Ok(a_new2)
 }
 
-pub(crate) fn keccak_f_1600<E, CS>(mut cs: CS, input: &[Boolean]) -> Result<Vec<Boolean>, SynthesisError>
+pub(crate) fn keccak_f_1600<E, CS>(
+    mut cs: CS,
+    input: &[Boolean],
+) -> Result<Vec<Boolean>, SynthesisError>
 where
     E: PrimeFieldBits,
     CS: ConstraintSystem<E>,
@@ -257,7 +260,7 @@ where
     }
 
     let a_new = a.into_iter().flat_map(|e| e.into_bits()).collect();
-    
+
     Ok(a_new)
 }
 
@@ -328,7 +331,7 @@ where
     }
 
     assert_eq!(state.len(), 1600);
-    
+
     Ok(state)
 }
 
@@ -352,11 +355,7 @@ where
         let cs = &mut cs.namespace(|| format!("keccack round in squeezing phase"));
         state = keccak_f_1600(cs, &state)?;
         for (o, &i) in state.iter().zip(expected_state.iter()) {
-            assert_eq!(
-                o.get_value().unwrap(),
-                i,
-                "keccak step mismatch!!"
-            );
+            assert_eq!(o.get_value().unwrap(), i, "keccak step mismatch!!");
         }
         z.extend(truncate(&state, r)?);
     }
@@ -382,7 +381,7 @@ pub(crate) fn shake256_pad101(input: &Vec<u8>) -> Vec<bool> {
     }
     padded.push(true);
     assert!(padded.len() % SHAKE256_BLOCK_LENGTH_BITS == 0);
-    
+
     padded
 }
 
@@ -422,7 +421,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::utils::{bits_to_bytes_le};
+    use crate::utils::bits_to_bytes_le;
     use bellpepper_core::boolean::AllocatedBit;
     use bellpepper_core::test_cs::TestConstraintSystem;
     use pasta_curves::Fp;
@@ -434,7 +433,9 @@ mod test {
         let mut input_bits: Vec<bool> = bytes_to_bits_le(&input_bytes);
         input_bits.resize(1600, false);
 
-        let input: Vec<Boolean> = input_bits.iter().enumerate()
+        let input: Vec<Boolean> = input_bits
+            .iter()
+            .enumerate()
             .map(|(i, &bit)| {
                 Boolean::from(
                     AllocatedBit::alloc(cs.namespace(|| format!("input bit {}", i)), Some(bit))
@@ -444,9 +445,9 @@ mod test {
             .collect();
 
         let output = keccak_f_1600(cs.namespace(|| "keccak_f_1600"), &input).unwrap();
-        
+
         let expected_output = library_step_sponge(input_bits, None, 1088, true);
-        
+
         for (o, &e) in output.iter().zip(expected_output.iter()) {
             assert_eq!(o.get_value().unwrap(), e, "keccak_f_1600 output mismatch!!");
         }
@@ -482,10 +483,20 @@ mod test {
             .collect();
 
         let padded_preimage = shake256_pad101(&preimage);
-        let result = shake256_inject(cs.namespace(|| "shake256 inject"), vec![Boolean::Constant(false); 1600], padded_preimage.into_iter().map(Boolean::Constant).collect(), 1088).unwrap();
+        let result = shake256_inject(
+            cs.namespace(|| "shake256 inject"),
+            vec![Boolean::Constant(false); 1600],
+            padded_preimage.into_iter().map(Boolean::Constant).collect(),
+            1088,
+        )
+        .unwrap();
 
         for (o, &e) in result.iter().zip(expected_output.iter()) {
-            assert_eq!(o.get_value().unwrap(), e, "shake256 inject output mismatch!!");
+            assert_eq!(
+                o.get_value().unwrap(),
+                e,
+                "shake256 inject output mismatch!!"
+            );
         }
 
         if !cs.is_satisfied() {
@@ -495,7 +506,6 @@ mod test {
 
         println!("shake256 inject constraints: {}", cs.num_constraints());
     }
-
 
     #[test]
     fn test_shake256_gadget() {

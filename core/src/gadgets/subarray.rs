@@ -1,29 +1,73 @@
 use core::alloc;
 
-use crate::utils::{select_from_vector_512, select_from_vec_linear};
-use nova_aadhaar_qr::util::{alloc_constant, conditionally_select, less_than, num_to_bits, alloc_num_equals_constant};
-use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError, boolean::Boolean, num::AllocatedNum};
+use crate::utils::{select_from_vec_linear, select_from_vector_512};
 use bellpepper::gadgets::Assignment;
+use bellpepper_core::{
+    boolean::Boolean, num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError,
+};
 use blstrs::Scalar;
-use falcon_rust::{MODULUS, N, LOG_N, Polynomial, PublicKey};
+use falcon_rust::{Polynomial, PublicKey, LOG_N, MODULUS, N};
 use ff::PrimeFieldBits;
+use nova_aadhaar_qr::util::{
+    alloc_constant, alloc_num_equals_constant, boolean_implies, conditionally_select, less_than, num_to_bits
+};
 
-// 5,131 constraints, independent of shift value
-pub(crate) fn var_shift_left<CS, Scalar>(mut cs: CS, input: &Vec<AllocatedNum<Scalar>>, shift: &AllocatedNum<Scalar>, n: usize, nbits: usize) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> 
+/// 5,131 constraints, independent of shift value
+/// Shift left by shift % n, 0 <= shift <= 2*n - 1
+pub(crate) fn var_shift_left<CS, Scalar>(
+    mut cs: CS,
+    input: &Vec<AllocatedNum<Scalar>>,
+    shift: &AllocatedNum<Scalar>,
+    n: usize,
+    nbits: usize,
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
 where
     Scalar: PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
     assert_eq!(input.len(), n);
 
+    // if shift > n then use shift as shift % n, but we can just enforce shift < n since we have n bits to represent shift
+    let var_n = alloc_constant(cs.namespace(|| "alloc_constant n for shift_minus_n"), Scalar::from(n as u64))?;
+    let shift_lt_n = less_than(
+        cs.namespace(|| "less_than shift n"),
+        shift,
+        &var_n,
+        nbits,
+    )?;
+    let shift_minus_n = AllocatedNum::alloc(cs.namespace(|| "alloc shift minus n"), || {
+        let mut v = shift.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        v.sub_assign(&Scalar::from(n as u64));
+        Ok(v)
+    })?;
+    cs.enforce(
+        || "enforce shift_minus_n = shift - n",
+        |lc| lc + shift.get_variable() - var_n.get_variable(),
+        |lc| lc + CS::one(),
+        |lc| lc + shift_minus_n.get_variable(),
+    );
+    
+    // shift = shift % n
+    let shift_res = conditionally_select(
+        cs.namespace(|| "conditionally_select shift_res"),
+        &shift,
+        &shift_minus_n,
+        &shift_lt_n,
+    )?;
+
     let mut output: Vec<AllocatedNum<Scalar>> = input.clone();
-    let shift_bits = num_to_bits(cs.namespace(|| "num_to_bits var_shift_left"), &shift, nbits)?;
+    let shift_bits = num_to_bits(cs.namespace(|| "num_to_bits var_shift_left"), &shift_res, nbits)?;
 
     for j in 0..nbits {
         let mut next = Vec::with_capacity(n);
         for i in 0..n {
             let off = (i + (1 << j)) % n;
-            let val = conditionally_select(cs.namespace(|| format!("conditionally_select var_shift_left_{}_{}",j,i)), &output[off], &output[i], &shift_bits[j])?;
+            let val = conditionally_select(
+                cs.namespace(|| format!("conditionally_select var_shift_left_{}_{}", j, i)),
+                &output[off],
+                &output[i],
+                &shift_bits[j],
+            )?;
             next.push(val);
         }
         output = next;
@@ -31,36 +75,66 @@ where
     Ok(output)
 }
 
-pub(crate) fn var_subarray_from_zero_index<CS, Scalar>(cs: &mut CS, input: &Vec<AllocatedNum<Scalar>>, end: &AllocatedNum<Scalar>, n: usize, nbits: usize) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
+pub(crate) fn var_subarray_from_zero_index<CS, Scalar>(
+    cs: &mut CS,
+    input: &Vec<AllocatedNum<Scalar>>,
+    end: &AllocatedNum<Scalar>,
+    n: usize,
+    nbits: usize,
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
 where
     Scalar: PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
     assert_eq!(input.len(), n);
-    
+
     let mut output: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(n);
-    let zero = alloc_constant(cs.namespace(|| "alloc_constant var_subarray_from_zero_index"), Scalar::from(0u64))?;
+    let zero = alloc_constant(
+        cs.namespace(|| "alloc_constant var_subarray_from_zero_index"),
+        Scalar::from(0u64),
+    )?;
     for i in 0..n {
         let i_const = alloc_constant(
             cs.namespace(|| format!("const_i_{i}")),
             Scalar::from(i as u64),
         )?;
-        let lt = less_than(cs.namespace(|| format!("less_than_var_subarray_from_zero_index_{}", i)), &i_const, &end, nbits)?;
-        output.push(conditionally_select(cs.namespace(|| format!("conditionally_select var_subarray_from_zero_index_{}",i)), &input[i], &zero, &lt)?);
+        let lt = less_than(
+            cs.namespace(|| format!("less_than_var_subarray_from_zero_index_{}", i)),
+            &i_const,
+            &end,
+            nbits,
+        )?;
+        output.push(conditionally_select(
+            cs.namespace(|| format!("conditionally_select var_subarray_from_zero_index_{}", i)),
+            &input[i],
+            &zero,
+            &lt,
+        )?);
     }
     Ok(output)
 }
 
 // 5,145 constraints without var_subarray_from_zero_index for n = 512
 /// left shift input by offset end - start
-pub(crate) fn var_subarray<CS, Scalar>(cs: &mut CS, input: Vec<AllocatedNum<Scalar>>, start: AllocatedNum<Scalar>, end: AllocatedNum<Scalar>, n: usize, nbits: usize) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
+pub(crate) fn var_subarray<CS, Scalar>(
+    cs: &mut CS,
+    input: Vec<AllocatedNum<Scalar>>,
+    start: AllocatedNum<Scalar>,
+    end: AllocatedNum<Scalar>,
+    n: usize,
+    nbits: usize,
+) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
 where
     Scalar: PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
-
     // enforce start < end
-    let lt = less_than(cs.namespace(|| "less_than var_subarray"), &start, &end, nbits)?;
+    let lt = less_than(
+        cs.namespace(|| "less_than var_subarray"),
+        &start,
+        &end,
+        nbits,
+    )?;
     Boolean::enforce_equal(
         cs.namespace(|| "enforce_start_lt_end"),
         &lt,
@@ -108,42 +182,37 @@ where
     assert_eq!(bit_array.len(), 68);
 
     let mut prefix: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
-    prefix.push(alloc_constant(cs.namespace(|| "prefix0"),Scalar::ZERO,)?,);
+    prefix.push(alloc_constant(cs.namespace(|| "prefix0"), Scalar::ZERO)?);
     for i in 1..68 {
-        let next = AllocatedNum::alloc(
-            cs.namespace(|| format!("prefix_{i}")),
-            || {
-                let prev = *prefix[i - 1].get_value().get()?;
+        let next = AllocatedNum::alloc(cs.namespace(|| format!("prefix_{i}")), || {
+            let prev = *prefix[i - 1].get_value().get()?;
 
-                let bit = if bit_array[i - 1]
-                    .get_value()
-                    .unwrap_or(false)
-                {
-                    Scalar::ONE
-                } else {
-                    Scalar::ZERO
-                };
+            let bit = if bit_array[i - 1].get_value().unwrap_or(false) {
+                Scalar::ONE
+            } else {
+                Scalar::ZERO
+            };
 
-                Ok(prev + bit)
-            },
-        )?;
+            Ok(prev + bit)
+        })?;
 
         cs.enforce(
             || format!("prefix update {i}"),
             |lc| lc + next.get_variable(),
             |lc| lc + CS::one(),
-            |lc| {
-                lc + prefix[i - 1].get_variable()
-                    + &bit_array[i - 1].lc(CS::one(), Scalar::ONE)
-            },
+            |lc| lc + prefix[i - 1].get_variable() + &bit_array[i - 1].lc(CS::one(), Scalar::ONE),
         );
 
         prefix.push(next);
     }
 
-    let mut output: Vec<AllocatedNum<Scalar>> =Vec::with_capacity(68);
+    let mut output: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
     for i in 0..68 {
-        let selected = select_from_vec_linear(cs.namespace(|| format!("select_from_vector_512_{i} pad_vec_from_bit_array")), &input, &prefix[i])?;
+        let selected = select_from_vec_linear(
+            cs.namespace(|| format!("select_from_vector_512_{i} pad_vec_from_bit_array")),
+            &input,
+            &prefix[i],
+        )?;
         output.push(selected);
     }
 
@@ -155,8 +224,8 @@ mod tests {
     use super::*;
     use bellpepper_core::test_cs::TestConstraintSystem;
     use blstrs::Scalar as Fr;
-    use rand::{rngs::StdRng, RngExt, SeedableRng};
     use ff::Field;
+    use rand::{rngs::StdRng, RngExt, SeedableRng};
 
     fn alloc_input(cs: &mut TestConstraintSystem<Fr>, n: usize) -> Vec<AllocatedNum<Fr>> {
         let mut rng = StdRng::seed_from_u64(42);
@@ -210,15 +279,16 @@ mod tests {
 
         let input_vals = get_vals(&input);
 
-        let expected: Vec<_> = (0..n)
-            .map(|i| input_vals[(i + 3) % n])
-            .collect();
+        let expected: Vec<_> = (0..n).map(|i| input_vals[(i + 3) % n]).collect();
 
         let out_vals = get_vals(&out);
 
         assert_eq!(expected, out_vals);
 
-        println!("number of constrainst for var_shift_left by 3: {}", cs.num_constraints());
+        println!(
+            "number of constrainst for var_shift_left by 3: {}",
+            cs.num_constraints()
+        );
 
         assert!(cs.is_satisfied());
     }
@@ -234,8 +304,7 @@ mod tests {
 
         let end = alloc_scalar(&mut cs, "end", 4);
 
-        let out =
-            var_subarray_from_zero_index(&mut cs, &input, &end, n, nbits).unwrap();
+        let out = var_subarray_from_zero_index(&mut cs, &input, &end, n, nbits).unwrap();
 
         let input_vals = get_vals(&input);
 
@@ -248,7 +317,10 @@ mod tests {
 
         assert_eq!(expected, out_vals);
 
-        println!("number constraints for var_subarray_from_zero_index by 4: {}", cs.num_constraints());
+        println!(
+            "number constraints for var_subarray_from_zero_index by 4: {}",
+            cs.num_constraints()
+        );
 
         assert!(cs.is_satisfied());
     }
@@ -276,7 +348,10 @@ mod tests {
         let out_vals = get_vals(&out);
         assert_eq!(expected, out_vals);
 
-        println!("number of constraints for var_subarray: {}", cs.num_constraints());
+        println!(
+            "number of constraints for var_subarray: {}",
+            cs.num_constraints()
+        );
 
         assert!(cs.is_satisfied());
     }
@@ -361,7 +436,10 @@ mod tests {
             );
         }
 
-        println!("number of constraints for pad_vec_bit_array: {}",after - before);
+        println!(
+            "number of constraints for pad_vec_bit_array: {}",
+            after - before
+        );
 
         assert!(cs.is_satisfied());
     }
