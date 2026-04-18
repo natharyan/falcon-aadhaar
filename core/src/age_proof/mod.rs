@@ -51,13 +51,13 @@ use std::{cmp::max, ops::Mul};
 // pub const OP_RSA_LAST: u64 = 16;
 // pub const OP_CODE_LAST: u64 = (OP_SHA256_NOOP << NUM_RSA_OPCODE_BITS) + OP_RSA_LAST;
 
-pub const NUM_OPCODE_BITS: usize = 10; // 1 MSB for SHAKE256 + 9 LSBs for COEFF_INDEX
-pub const NUM_COEFF_INDEX_BITS: u64 = 9;
+pub const NUM_OPCODE_BITS: usize = 11; // 1 MSB for SHAKE256 + 10 LSBs for COEFF_INDEX
+pub const NUM_COEFF_INDEX_BITS: u64 = 10; // COEFF_INDEX <= 512
 pub const COEFF_INDEX_MASK: u64 = (1 << NUM_COEFF_INDEX_BITS) - 1;
 pub const OP_SHAKE256_ACTIVE: u64 = 0;
 pub const OP_SHAKE256_NO_OP: u64 = 1;
 pub const OP_COEFF_INDEX_FIRST: u64 = 0;
-pub const OP_COEFF_INDEX_LAST: u64 = 511;
+pub const OP_COEFF_INDEX_LAST: u64 = 512;
 pub const OP_CODE_LAST: u64 = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_LAST;
 pub const L2_NORM_INIT: u64 = 0;
 
@@ -90,7 +90,7 @@ impl<Scalar> AadhaarAgeProofCircuit<Scalar>
 where
     Scalar: PrimeFieldBits,
 {
-    fn default(h: PublicKey, s2: Polynomial, c: Polynomial) -> Self {
+    pub fn default(h: PublicKey, s2: Polynomial, c: Polynomial) -> Self {
         Self {
             opcode: 0u64,
             next_opcode: 0u64,
@@ -270,11 +270,11 @@ where
                 let s1_normalized = normalize_coeff(s1_coeff as i64);
                 let s2_normalized = normalize_coeff(s2.coeff()[coeff_index as usize] as i64);
                 sum_aggregated = sum_aggregated + s1_normalized * s1_normalized + s2_normalized * s2_normalized;
-                if coeff_index <= OP_COEFF_INDEX_LAST{ 
+                if coeff_index < OP_COEFF_INDEX_LAST{ 
                     coeff_index = coeff_index + 1u64; // coeff_index == number of coefficients sampled, 0 <= coeff_index <= 512
                 }
             }
-            if coeff_index <= OP_COEFF_INDEX_LAST + 1 {
+            if coeff_index <= OP_COEFF_INDEX_LAST{
                 l2_norm_sum = l2_norm_sum + sum_aggregated;
             }
             // l2_norm_sum = l2_norm_sum + sum_aggregated;
@@ -291,7 +291,9 @@ where
                 1088,
                 false,
             );
-            
+
+            opcode = next_opcode;
+
             let temp_next_opcode = next_opcode.clone();
 
             next_opcode = if i < num_blocks - 1 {
@@ -300,13 +302,13 @@ where
                 (OP_SHAKE256_NO_OP << NUM_OPCODE_BITS) + coeff_index
             };
 
+            // once coeff_index == 512, next_opcode remains the same.
             if coeff_index > OP_COEFF_INDEX_LAST {
                 // next_opcode = next_opcode - 64;
                 next_opcode = temp_next_opcode;
+                coeff_index = OP_COEFF_INDEX_LAST;
             }
 
-            opcode = next_opcode;
-            
             aadhaar_steps.push(Self {
                 opcode: opcode,
                 coeff_index: coeff_index,
@@ -371,12 +373,12 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mut next_opcode = AllocatedNum::alloc(cs.namespace(|| "next opcode"), || {
+        let next_opcode = AllocatedNum::alloc(cs.namespace(|| "next opcode"), || {
             Ok(Scalar::from(self.next_opcode))
         })?;
 
         let mut l2_norm_sum_var = AllocatedNum::alloc(cs.namespace(|| "l2_norm_sum"), || Ok(Scalar::from(self.l2_norm_sum)))?;
-        let mut prev_nullifier_var = AllocatedNum::alloc(cs.namespace(|| "prev_nullifier"), || Ok(self.prev_nullifier))?;
+        let prev_nullifier_var = AllocatedNum::alloc(cs.namespace(|| "prev_nullifier"), || Ok(self.prev_nullifier))?;
         
         let mut ctx_absorb_vars: Vec<Boolean> = vec![];
         
@@ -701,7 +703,7 @@ where
         ctx_absorb_vars = keccak_f_1600(cs.namespace(|| "SHA256 step sponge"), &absorb_xor_msg)?;
 
         let var_512 = alloc_constant(cs.namespace(|| "alloc_constant 512"), Scalar::from(512u64))?;
-        let flag_coeff = less_than(
+        let flag_coeff = less_than_or_equal(
             cs.namespace(|| "flag_coeff"),
             &coeff_index,
             &var_512,
@@ -713,32 +715,48 @@ where
         //     &sum_aggregated,
         // )?;
         // boolean_implies flag_coeff to num_alloc_equals(next_coeff_index, coeff_index)
-        let coeff_eq = alloc_num_equals(cs.namespace(|| "next_coeff_index equals coeff_index"), &next_coeff_index, &coeff_index)?;
-        boolean_implies(
-            cs.namespace(|| "flag_coeff implies next_coeff_index = coeff_index"),
+        // let coeff_eq = alloc_num_equals(cs.namespace(|| "next_coeff_index equals coeff_index"), &next_coeff_index, &coeff_index)?;
+        // boolean_implies(
+        //     cs.namespace(|| "flag_coeff implies next_coeff_index = coeff_index"),
+        //     &flag_coeff,
+        //     &coeff_eq,
+        // )?;
+        // // no trait for allocatednum.sub constraint coeff_index_minus_64. First alloc and then constrain
+        // let coeff_index_minus_64 = AllocatedNum::alloc(
+        //     cs.namespace(|| "coeff_index_minus_64"),
+        //     || {
+        //         let coeff_index_value = coeff_index.get_value().ok_or(SynthesisError::AssignmentMissing)?;
+        //         Ok(coeff_index_value - Scalar::from(64u64))
+        //     },
+        // )?;
+
+        // let coeff_eq_64 = alloc_num_equals(cs.namespace(|| "next_coeff_index equals coeff_index_minus_64"), &next_coeff_index, &coeff_index_minus_64)?;
+        // boolean_implies(
+        //     cs.namespace(|| "flag_coeff implies next_coeff_index = coeff_index - 64"),
+        //     &flag_coeff.not(),
+        //     &coeff_eq_64,
+        // )?;
+
+        let min_512_coeff_index = conditionally_select(
+            cs.namespace(|| "next_coeff_index conditional select"),
+            &coeff_index,
+            &var_512,
             &flag_coeff,
-            &coeff_eq,
-        )?;
-        // no trait for allocatednum.sub constraint coeff_index_minus_64. First alloc and then constrain
-        let coeff_index_minus_64 = AllocatedNum::alloc(
-            cs.namespace(|| "coeff_index_minus_64"),
-            || {
-                let coeff_index_value = coeff_index.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-                Ok(coeff_index_value - Scalar::from(64u64))
-            },
         )?;
 
-        let coeff_eq_64 = alloc_num_equals(cs.namespace(|| "next_coeff_index equals coeff_index_minus_64"), &next_coeff_index, &coeff_index_minus_64)?;
-        boolean_implies(
-            cs.namespace(|| "flag_coeff implies next_coeff_index = coeff_index - 64"),
-            &flag_coeff.not(),
-            &coeff_eq_64,
-        )?;
+        // Enforce next_coeff_index = min(coeff_index, 512)
+        cs.enforce(
+            || "enforce next_coeff_index = min(coeff_index, 512)",
+            |lc| lc + next_coeff_index.get_variable(),
+            |lc| lc + CS::one(),
+            |lc| lc + min_512_coeff_index.get_variable(),
+        );
 
         let l2_norm_sum_inc = l2_norm_sum_var.add(
             cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_update"),
             &sum_aggregated,
         )?;
+        // Skip l2_norm_sum update if coeff_index > 512
         l2_norm_sum_var = conditionally_select(
             cs.namespace(|| "l2_norm_sum conditional select"),
             &l2_norm_sum_inc,
@@ -751,14 +769,10 @@ where
             cs.namespace(|| "enforce_less_than_norm_bound naive_incremental"),
             &l2_norm_sum_var,
         )?;
-        let res = Boolean::or(
-            cs.namespace(|| "boolean or flag_coeff flag_norm_bound"),
-            &flag_coeff,
-            &flag_norm_bound,
-        )?;
+        
         Boolean::enforce_equal(
-            cs.namespace(|| "enforce or result is true"),
-            &res,
+            cs.namespace(|| "enforce norm bound"),
+            &flag_norm_bound,
             &Boolean::Constant(true),
         )?;
 
@@ -803,8 +817,6 @@ where
             |lc| lc + (Scalar::from(64u64), CS::one()),
             |lc| lc + coeff_index_init.get_variable(),
         );
-
-        // TODO: if step_i > 7 then use step_i = 7
 
         // 3-bit range check: step_i in {0, 1, ..., 6}, prevent the prover from choosing an arbitrary step_i that satisfies step_i * 64 = coeff_index_init
         let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
@@ -872,15 +884,29 @@ where
         )?;
 
 
-        // TODO check if this needs to be constrained
-        let msg_without_timestamp: Vec<u8> = [
-            &self.msg[0..TIMESTAMP_START_BYTE_INDEX],
-            &[0u8; NAME_START_BYTE_INDEX - TIMESTAMP_START_BYTE_INDEX],
-            &self.msg[NAME_START_BYTE_INDEX..],
-        ]
-        .concat()
-        .try_into()
-        .unwrap();
+        // TODO confirm about lack of intra-application linkability via io_hash
+        // let mut msg_without_timestamp: Vec<Boolean> = vec![];
+        // for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
+        //     msg_without_timestamp.push(msg_vars[i].clone());
+        // }
+        // for _i in TIMESTAMP_START_BYTE_INDEX * 8..NAME_START_BYTE_INDEX * 8 {
+        //     msg_without_timestamp.push(Boolean::Constant(false));
+        // }
+        // for i in NAME_START_BYTE_INDEX * 8..SHAKE256_BLOCK_LENGTH_BITS {
+        //     msg_without_timestamp.push(msg_vars[i].clone());
+        // }
+
+        // let mut two_sha256_msg_blocks_without_timestamp = vec![];
+        // for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
+        //     two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
+        // }
+        // for _i in TIMESTAMP_START_BYTE_INDEX * 8..NAME_START_BYTE_INDEX * 8 {
+        //     two_sha256_msg_blocks_without_timestamp.push(Boolean::Constant(false));
+        // }
+        // for i in NAME_START_BYTE_INDEX * 8..2 * SHA256_BLOCK_LENGTH_BYTES * 8 {
+        //     two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
+        // }
+
 
         // let nullifier_hasher = PoseidonHasher::<Scalar>::new(1 +  msg_without_timestamp.len() as u32);
         // let mut temp_nullifier_1_preimage = msg_without_timestamp.iter().map(|&b| Scalar::from(b as u64)).collect::<Vec<Scalar>>();
@@ -910,38 +936,30 @@ where
                 Scalar::from(self.dob_byte_index as u64)
             });
 
-        let mut shift_bits =
-            dob_byte_index.to_bits_le(cs.namespace(|| "decompose DoB byte index"))?;
-        shift_bits.truncate(DOB_INDEX_BIT_LENGTH);
-
         let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
             cs.namespace(|| "check if delimiter count before DoB is correct"),
             &msg_vars,
             &dob_byte_index,
         )?;
         boolean_implies(
-            cs.namespace(|| "if first SHA256 step then delimiter count must be correct"),
+            cs.namespace(|| "if first SHAKE256 step then delimiter count must be correct"),
             &flag_first_step,
             &delimiter_count_correct,
         )?;
 
-        let mut msg_vars_for_shift = msg_vars.clone();
-        let shift_input_len = 1usize << (DOB_INDEX_BIT_LENGTH + 3);
-        msg_vars_for_shift.resize(shift_input_len, Boolean::Constant(false));
+        let mut shift_bits =
+            dob_byte_index.to_bits_le(cs.namespace(|| "decompose DoB byte index"))?;
+        shift_bits.truncate(DOB_INDEX_BIT_LENGTH);
 
-        // let shifted_msg = left_shift_bytes(
-        //     cs.namespace(|| "left shift to bring DoB bytes to the beginning"),
-        //     &msg_vars,
-        //     &shift_bits,
-        // )?;
-        let shifted_msg = left_shift_bytes(
+        let shifted_msg_blocks = left_shift_bytes(
             cs.namespace(|| "left shift to bring DoB bytes to the beginning"),
-            &msg_vars_for_shift,
+            &msg_vars,
             &shift_bits,
         )?;
+        // TODO from here
         let (day, month, year) = get_day_month_year_conditional(
             cs.namespace(|| "get birth day, month, year"),
-            &shifted_msg[0..DATE_LENGTH_BYTES * 8],
+            &shifted_msg_blocks[0..DATE_LENGTH_BYTES * 8],
             &flag_first_step,
         )?;
 
@@ -972,17 +990,10 @@ where
             19, // In the first step, age will occupy 7 bits but in later steps it can occupy 19 bits
         )?;
         boolean_implies(
-            cs.namespace(|| "if first SHA256 step then age must at least 18"),
+            cs.namespace(|| "if first SHAKE256 step then age must at least 18"),
             &flag_first_step,
             &age_gte_18,
         )?;
-
-        let last_z_out = vec![
-            next_opcode.clone(),
-            hash_c.clone(),
-            shake_block_next.clone(),
-            next_nullifier.clone(),
-        ];
 
         // let z_out = conditionally_select_vec(
         //     cs.namespace(|| "Choose between outputs of last opcode and others"),
@@ -990,8 +1001,11 @@ where
         //     &[next_opcode, hash_c.clone(), next_shake_inject_m_block, next_nullifier],
         //     &flag_final_step,
         // )?;
-        let z_out = last_z_out;
-
-        Ok(z_out)
+        Ok(vec![
+            next_opcode.clone(),
+            hash_c.clone(),
+            shake_block_next.clone(),
+            next_nullifier.clone(),
+        ])
     }
 }

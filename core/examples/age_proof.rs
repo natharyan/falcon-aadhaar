@@ -88,7 +88,19 @@ fn main() {
     type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
     type C1 = AadhaarAgeProofCircuit<<E1 as Engine>::Scalar>;
     type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
-    let circuit_primary: C1 = AadhaarAgeProofCircuit::default();
+
+    let res = parse_aadhaar_qr_data(decompressed_qr_bytes.to_vec());
+    if !res.is_ok() {
+        panic!("Error parsing Aadhaar QR code bytes")
+    }
+    let aadhaar_qr_data: AadhaarQRData = res.unwrap();
+    println!(
+        "Number of bytes in QR code: {}",
+        aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
+    );
+
+
+    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(aadhaar_qr_data.pk, aadhaar_qr_data.s2, aadhaar_qr_data.c);
     let circuit_secondary: C2 = TrivialCircuit::default();
 
     let param_gen_timer = Instant::now();
@@ -122,15 +134,7 @@ fn main() {
         pp.num_variables().1
     );
 
-    let res = parse_aadhaar_qr_data(decompressed_qr_bytes.to_vec());
-    if !res.is_ok() {
-        panic!("Error parsing Aadhaar QR code bytes")
-    }
-    let aadhaar_qr_data: AadhaarQRData = res.unwrap();
-    println!(
-        "Number of bytes in QR code: {}",
-        aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
-    );
+    
     let primary_circuit_sequence = C1::new_state_sequence(
         &aadhaar_qr_data,
         &aadhaar_qr_data.falcon_sig,

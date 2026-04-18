@@ -1,21 +1,13 @@
-Privacy-preserving age proofs using incrementally verifiable computation for Aadhaar QR codes retrofitted with Falcon signatures.
+Privacy-Preserving Age Proofs for Aadhaar Using Falcon
 ------
-<a href="https://falcon-sign.info/falcon.pdf" target="_blank">Falcon signature</a> is a lattice-based signature, and a winner of [NIST PQC competition](https://csrc.nist.gov/Projects/post-quantum-cryptography/selected-algorithms-2022). It has desirable properties such as compact signatures and relatively simple verification.
-
-<a href="https://falcon-sign.info/falcon.pdf" target="_blank">Bellpepper</a> is a Rust library that we use to generate R1CS circuits, which are used to create zero-knowledge proofs that attest to a prover knowing a valid Aadhaar QR code with a Falcon signature.
-
-We design and implement Falcon signature verification as an incremental computation and combine it with Nova Aadhaar's implementation in Bellpepper for creating privacy-preserving age proofs.
+We retrofit Aadhaar QR codes with post-quantum <a href="https://falcon-sign.info/falcon.pdf" target="_blank">Falcon signature</a> and construct a privacy-preserving age proof using incrementally verifiable computation (IVC). Our primary contribution is Falcon verification as an incremental computation, compatible with standard implementations. We develop R1CS circuits using <a href="https://falcon-sign.info/falcon.pdf" target="_blank">Bellpepper</a> for Falcon signature verification and age threshold check on an Aadhaar QR code, combined with Nova folding for efficient zero-knowledge proofs. We compare our R1CS metrics with prior age proof work and Falcon proof of possession.
 
 ## Project Structure
 
-- [`core/`](core/) - Main Falcon Aadhaar implementation
+- [`core/`](core/) - core implementation for age proof and Falcon signature proof of possession.
 - [`dependencies/falcon-rust/`](dependencies/falcon-rust/) - Rust wrapper for Falcon signatures,
   sourced from <a href="https://github.com/zhenfeizhang/falcon.rs/tree/master/falcon-rust" target="_blank">zhenfeizhang/falcon.rs/falcon-rust</a>.
-- [`dependencies/falcon-r1cs/`](dependencies/falcon-r1cs/) - R1CS circuits for Falcon signature verification using Arkworks framework,
-  sourced from <a href="https://github.com/zhenfeizhang/falcon.rs/tree/master/falcon-r1cs" target="_blank">zhenfeizhang/falcon.rs/falcon-r1cs</a>.
-- [`dependencies/nova-aadhaar-qr/`](dependencies/nova-aadhaar-qr/) - Implementation of
+- [`dependencies/falcon-r1cs/`](dependencies/falcon-r1cs/) - R1CS circuits for Falcon signature verification using Arkworks framework, sourced from <a href="https://github.com/zhenfeizhang/falcon.rs/tree/master/falcon-r1cs" target="_blank">zhenfeizhang/falcon.rs/falcon-r1cs</a>.
+- [`dependencies/nova-aadhaar-qr/`](dependencies/nova-aadhaar-qr/) - implementation of
   <a href="https://www.ee.iitb.ac.in/~sarva/zk/aadhaar-age-proof.pdf" target="_blank">Nova Aadhaar</a>,
   sourced from <a href="https://github.com/avras/nova-aadhaar-qr" target="_blank">avras/nova-aadhaar-qr</a>.
-
-## In progress
-- The HashToCoeffs function is being optimized to get fewer constraints than normal NTT based falcon signature verification with the same input/witness initialization.
