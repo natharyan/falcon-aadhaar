@@ -113,11 +113,11 @@ where
         prev_nullifier: Scalar,
         l2_norm_sum: u64,
         ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
-        msg_blocks: &Vec<[u8; 136]>,
+        msg: &Vec<u8>,
     ) -> Scalar {
         let ctx_inject: [bool; 1600] = library_shake256_inject(
             [false; 1600],
-            msg_blocks.iter().flatten().cloned().collect(),
+            msg.clone(),
         );
         let ctx_inject_packed = compute_multipacking::<Scalar>(&ctx_inject);
         assert!(ctx_inject_packed.len() == 7);
@@ -140,13 +140,11 @@ where
     ) -> Vec<Scalar> {
         let initial_opcode = Scalar::from((OP_SHAKE256_ACTIVE << NUM_OPCODE_BITS) + OP_COEFF_INDEX_FIRST);
 
-        let msg_bits_padded: Vec<bool> = shake256_pad101(&msg);
-        let msg = bits_to_bytes_le(&msg_bits_padded);
         let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&msg);
 
         let ctx_inject: [bool; 1600] = library_shake256_inject(
             [false; 1600],
-            msg_blocks.iter().flatten().cloned().collect(),
+            msg.to_vec(),
         );
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
@@ -181,33 +179,26 @@ where
     ) -> Vec<AadhaarAgeProofCircuit<Scalar>> {
         let mut aadhaar_steps: Vec<AadhaarAgeProofCircuit<Scalar>> = vec![];
 
-        let mut msg: Vec<u8> = aadhaar_qr_data.signed_data.clone();
-        let msg_bits_padded: Vec<bool> = shake256_pad101(&msg);
-        
-        msg = bits_to_bytes_le(&msg_bits_padded);
-        let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&msg);
+        let signed_msg: Vec<u8> = aadhaar_qr_data.signed_data.clone();
+        let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&signed_msg);
 
         let s2: Polynomial = sig.into();
-        let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
+        let c: Polynomial = Polynomial::from_hash_of_message(signed_msg.as_ref(), sig.nonce());
         let pk_poly: Polynomial = (&pk).into();
 
         let mut prev_nullifier = Scalar::ZERO; // App_ID set as 0 for now
 
         let mut opcode = (OP_SHAKE256_ACTIVE << NUM_OPCODE_BITS) + OP_COEFF_INDEX_FIRST;
         let mut next_opcode = if msg_blocks.len() == 1 {
-            (OP_SHAKE256_NO_OP << NUM_OPCODE_BITS) + (OP_COEFF_INDEX_FIRST) + 64
+            (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + (OP_COEFF_INDEX_FIRST) + 64
         } else {
             opcode + 64
         };
         let mut coeff_index: u64 = OP_COEFF_INDEX_FIRST;
 
-        let s2: Polynomial = sig.into();
-        let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
-        let pk_poly: Polynomial = (&pk).into();
-
         let ctx_inject: [bool; 1600] = library_shake256_inject(
             [false; 1600],
-            msg_blocks.iter().flatten().cloned().collect(),
+            signed_msg.clone(),
         );
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
@@ -241,6 +232,8 @@ where
             c: c.clone(),
         });
 
+        prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &signed_msg);
+
         let num_blocks = msg_blocks.len();
         println!("Number of SHAKE256.inject steps: {}", num_blocks);
         let num_steps = max(num_blocks, 8);
@@ -252,33 +245,36 @@ where
         let ntt_s2h: NTTPolynomial = ntt_s2.mul(ntt_h);
         let prod_s2h: Polynomial = inv_ntt(&ntt_s2h);
         for i in 1..num_steps {
+            let coeff_index_init = coeff_index;
             let mut sum_aggregated = 0u64;
             for k in 0..64 {
+                let idx = ((coeff_index_init + k as u64) % (N as u64)) as usize;
                 let flag_coeff_c_less_2h =
-                    if c.coeff()[coeff_index as usize] < prod_s2h.coeff()[coeff_index as usize] {
+                    if c.coeff()[idx] < prod_s2h.coeff()[idx] {
                         true
                     } else {
                         false
                     };
                 // coefficients of both c and prod_s2h are already modulo q.
-                let c_lt_s2h = c.coeff()[coeff_index as usize] + MODULUS - prod_s2h.coeff()[coeff_index as usize];
+                let c_lt_s2h = c.coeff()[idx] + MODULUS - prod_s2h.coeff()[idx];
                 let s1_coeff = if flag_coeff_c_less_2h {
                     c_lt_s2h
                 } else {
-                    c.coeff()[coeff_index as usize] - prod_s2h.coeff()[coeff_index as usize]
+                    c.coeff()[idx] - prod_s2h.coeff()[idx]
                 };
                 let s1_normalized = normalize_coeff(s1_coeff as i64);
-                let s2_normalized = normalize_coeff(s2.coeff()[coeff_index as usize] as i64);
+                let s2_normalized = normalize_coeff(s2.coeff()[idx] as i64);
                 sum_aggregated = sum_aggregated + s1_normalized * s1_normalized + s2_normalized * s2_normalized;
-                if coeff_index < OP_COEFF_INDEX_LAST{ 
-                    coeff_index = coeff_index + 1u64; // coeff_index == number of coefficients sampled, 0 <= coeff_index <= 512
-                }
             }
-            if coeff_index <= OP_COEFF_INDEX_LAST{
+
+            let coeff_index_next = coeff_index_init + 64;  // Compute END position
+            if coeff_index_next <= OP_COEFF_INDEX_LAST {
                 l2_norm_sum = l2_norm_sum + sum_aggregated;
             }
-            // l2_norm_sum = l2_norm_sum + sum_aggregated;
-            if l2_norm_sum >= SIG_L2_BOUND{
+            
+            coeff_index = coeff_index_next.min(OP_COEFF_INDEX_LAST);  // Cap at 512 for next step
+            
+            if l2_norm_sum >= SIG_L2_BOUND {
                 panic!(
                     "L2 norm exceeded SIG_L2_BOUND at coeff {}: {}",
                     i, l2_norm_sum
@@ -287,19 +283,22 @@ where
 
             ctx_absorb = library_step_sponge(
                 ctx_absorb.to_vec(),
-                Some(bytes_to_bits_le(&msg_blocks[i % num_blocks])),
+                Some(bytes_to_bits_le(&msg_blocks[(i - 1) % num_blocks])),
                 1088,
                 false,
             );
 
             opcode = next_opcode;
+            let temp_next_opcode = next_opcode;
 
-            let temp_next_opcode = next_opcode.clone();
+            // next step's coeff_index_init = current init + 64, capped at 512
+            let cur_coeff_init = opcode & COEFF_INDEX_MASK;
+            let next_coeff = (cur_coeff_init + 64).min(OP_COEFF_INDEX_LAST);
 
             next_opcode = if i < num_blocks - 1 {
-                (OP_SHAKE256_ACTIVE << NUM_OPCODE_BITS) + coeff_index
+                (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + next_coeff
             } else {
-                (OP_SHAKE256_NO_OP << NUM_OPCODE_BITS) + coeff_index
+                (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + next_coeff
             };
 
             // once coeff_index == 512, next_opcode remains the same.
@@ -308,12 +307,12 @@ where
                 next_opcode = temp_next_opcode;
                 coeff_index = OP_COEFF_INDEX_LAST;
             }
-
+            
             aadhaar_steps.push(Self {
                 opcode: opcode,
                 coeff_index: coeff_index,
                 next_opcode: next_opcode,
-                msg: msg_blocks[0],
+                msg: msg_blocks[i % num_blocks],
                 dob_byte_index: aadhaar_qr_data.dob_byte_index,
                 l2_norm_sum: l2_norm_sum,
                 ctx_absorb: ctx_absorb.clone(),
@@ -325,9 +324,8 @@ where
                 hash_c: hash_c,
                 c: c.clone(),
             });
-
-            prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &msg_blocks);
             
+            prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &signed_msg);
         }
 
         aadhaar_steps
@@ -356,13 +354,15 @@ where
             .s2
             .coeff()
             .iter()
-            .map(|&x| AllocatedNum::alloc(cs.namespace(|| format!("s2 coeff {}", x)), || Ok(Scalar::from(x as u64))))
+            .enumerate()
+            .map(|(i, &x)| AllocatedNum::alloc(cs.namespace(|| format!("s2 coeff {}", i)), || Ok(Scalar::from(x as u64))))
             .collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
         let c_vars = self
             .c
             .coeff()
             .iter()
-            .map(|&x| AllocatedNum::alloc(cs.namespace(|| format!("c coeff {}", x)), || Ok(Scalar::from(x as u64))))
+            .enumerate()
+            .map(|(i, &x)| AllocatedNum::alloc(cs.namespace(|| format!("c coeff {}", i)), || Ok(Scalar::from(x as u64))))
             .collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
 
         let ctx_inject_packed_vars = self.ctx_inject_packed
@@ -404,7 +404,7 @@ where
         
         let nullifier_hasher = PoseidonHasher::<Scalar>::new(nullifier_preimage.len() as u32);
         let nullifier_calculated = nullifier_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "poseidon hash nullifier preimage"),
+            &mut cs.namespace(|| "poseidon hash nullifier preimage nullifier_calculated"),
             &nullifier_preimage,
         )?;
 
@@ -447,14 +447,6 @@ where
             &next_coeff_index,
             next_coeff_index_bits_le,
         )?;
-
-        // Enforce next_coeff_index = coeff_index + 64
-        cs.enforce(
-            || "enforce next_coeff_index = coeff_index + 64",
-            |lc| lc + next_coeff_index.get_variable(),
-            |lc: LinearCombination<Scalar>| lc + CS::one(),
-            |lc| lc + coeff_index.get_variable() + (Scalar::from(64u64), CS::one()),
-        );
         
         // once shake256_opcode is 1, next_shake_opcode must be 1 as well
         boolean_implies(
@@ -680,14 +672,21 @@ where
                 cs.namespace(|| format!("sum_aggregated = sum_aggregated + sum_update_{}", k)),
                 &sum_update,
             )?;
-            coeff_index = coeff_index.add(
-                cs.namespace(|| format!("coeff_index = coeff_index + 1_{}", k)),
-                &var1,
-            )?;
+            // coeff_index = coeff_index.add(
+            //     cs.namespace(|| format!("coeff_index = coeff_index + 1_{}", k)),
+            //     &var1,
+            // )?;
         }
 
+        let var_64 = alloc_constant(cs.namespace(|| "const_64"), Scalar::from(64u64))?;
+
+        let coeff_index_after = coeff_index_init.add(
+            cs.namespace(|| "coeff_index + 64"),
+            &var_64,
+        )?;
+
         // XOR message block with keccak state
-        let absorb_xor_msg = msg_vars
+        let mut absorb_xor_msg = msg_vars
             .iter()
             .enumerate()
             .map(|(i, b)| {
@@ -698,14 +697,15 @@ where
                 )
             })
             .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
-        
+        absorb_xor_msg.extend(ctx_absorb_vars[SHAKE256_BLOCK_LENGTH_BITS..].iter().cloned());
+
         // apply keccak round permuation
         ctx_absorb_vars = keccak_f_1600(cs.namespace(|| "SHA256 step sponge"), &absorb_xor_msg)?;
 
         let var_512 = alloc_constant(cs.namespace(|| "alloc_constant 512"), Scalar::from(512u64))?;
         let flag_coeff = less_than_or_equal(
             cs.namespace(|| "flag_coeff"),
-            &coeff_index,
+            &coeff_index_after,
             &var_512,
             LOG_N + 1,
         )?;
@@ -739,7 +739,7 @@ where
 
         let min_512_coeff_index = conditionally_select(
             cs.namespace(|| "next_coeff_index conditional select"),
-            &coeff_index,
+            &coeff_index_after,
             &var_512,
             &flag_coeff,
         )?;
@@ -805,30 +805,47 @@ where
             &flag_final_absorb,
         )?;
 
-        // self.coeff_index <= 448, so step_i_val = self.coeff_index / 64 is in the range [0, 6]
-        let step_i_val = self.coeff_index / 64;
-        let step_i =
-            AllocatedNum::alloc(cs.namespace(|| "step_i"), || Ok(Scalar::from(step_i_val)))?;
+        // self.coeff_index <= 512, so self.coeff_index / 64 is in the range [0, 8]
+        let step_i_val = (self.coeff_index / 64) % 7;
+        let step_i = AllocatedNum::alloc(cs.namespace(|| "step_i"), || Ok(Scalar::from(step_i_val)))?;
 
-        // Enforce: step_i * 64 = coeff_index_init
+        // Allocate min(coeff_index_init, 448) in-circuit
+        // let var_448 = alloc_constant(cs.namespace(|| "const_448"), Scalar::from(448u64))?;
+        // let flag_coeff_init_leq_448 = less_than_or_equal(
+        //     cs.namespace(|| "coeff_index_init <= 448"),
+        //     &coeff_index_init,
+        //     &var_448,
+        //     LOG_N + 1,
+        // )?;
+        // let coeff_index_init_capped = conditionally_select(
+        //     cs.namespace(|| "min(coeff_index_init, 448)"),
+        //     &coeff_index_init,
+        //     &var_448,
+        //     &flag_coeff_init_leq_448,
+        // )?;
+
+        let q_val = (self.coeff_index / 64) / 7; // 0 for ci<448, 1 for ci>=448
+        let q = AllocatedNum::alloc(cs.namespace(|| "step_i_q"), || Ok(Scalar::from(q_val)))?;
+
+        // 1-bit range check for q
+        let _ = num_to_bits(cs.namespace(|| "q_bits"), &q, 1)?;
+
+        // 3-bit range check for step_i (unchanged)
+        let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
+
+        // Enforce: step_i * 64 = min(coeff_index_init, 448)
         cs.enforce(
-            || "step_i * 64 = coeff_index_init",
-            |lc| lc + step_i.get_variable(),
-            |lc| lc + (Scalar::from(64u64), CS::one()),
+            || "64 * step_i + 448 * q = coeff_index_init",
+            |lc| lc + (Scalar::from(64u64), step_i.get_variable()) + (Scalar::from(448u64), q.get_variable()),
+            |lc| lc + CS::one(),
             |lc| lc + coeff_index_init.get_variable(),
         );
 
-        // 3-bit range check: step_i in {0, 1, ..., 6}, prevent the prover from choosing an arbitrary step_i that satisfies step_i * 64 = coeff_index_init
-        let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
-
-        // step_i in {0..6} = step_i (identity)
-        // step_i = 7 = 0 (wrap)
         let const_zero = alloc_constant(cs.namespace(|| "const_0"), Scalar::ZERO)?;
         let const_seven = alloc_constant(cs.namespace(|| "const_7"), Scalar::from(7u64))?;
 
         let step_eq_7: Boolean =
             alloc_num_equals_constant(cs.namespace(|| "step_eq_7"), &step_i, Scalar::from(7u64))?;
-        // If step_i == 7 select 0, otherwise select step_i.
         let step_i_mod7 = conditionally_select(
             cs.namespace(|| "step_i_mod7"),
             &const_zero,
@@ -849,10 +866,12 @@ where
             |lc| lc,
         );
 
-        // Compute next_idx = (step_i_mod7 + 1) % 7 in-circuit
-        // If result == 7 wrap to 0, otherwise keep.
+        let flag_at_max = alloc_num_equals_constant(
+            cs.namespace(|| "coeff_index_init == 512"),
+            &coeff_index_init,
+            Scalar::from(512u64),
+        )?;
         let step_plus1 = step_i_mod7.add(cs.namespace(|| "step_plus1"), &var1)?;
-
         let step_plus1_eq_7: Boolean = alloc_num_equals_constant(
             cs.namespace(|| "step_plus1_eq_7"),
             &step_plus1,
@@ -865,21 +884,28 @@ where
             &step_plus1_eq_7,
         )?;
 
-        let shake_block_next = select_from_vec_linear(
+        let shake_block_next_normal = select_from_vec_linear(
             cs.namespace(|| "sel_next_shake"),
             &ctx_inject_packed_vars,
             &next_idx,
+        )?;
+
+        let shake_block_next = conditionally_select(
+            cs.namespace(|| "freeze shake_block if at max"),
+            cur_shake_block,
+            &shake_block_next_normal,
+            &flag_at_max,
         )?;
 
         // constrain the next nullifier
         let mut next_nullifier_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
         next_nullifier_preimage.push(l2_norm_sum_var);
         next_nullifier_preimage.extend(ctx_absorb_packed_vars);
-        next_nullifier_preimage.push(nullifier.clone());
+        next_nullifier_preimage.push(nullifier_calculated.clone());
         
         let next_nullifier_hasher = PoseidonHasher::<Scalar>::new(next_nullifier_preimage.len() as u32);
         let next_nullifier = next_nullifier_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "poseidon hash nullifier preimage"),
+            &mut cs.namespace(|| "poseidon hash nullifier preimage next_nullifier"),
             &next_nullifier_preimage,
         )?;
 
@@ -956,10 +982,20 @@ where
             &msg_vars,
             &shift_bits,
         )?;
-        // TODO from here
+        
+        // Convert shifted bits from LE to BE for character extraction
+        let mut shifted_msg_blocks_be = vec![];
+        for byte_idx in 0..(shifted_msg_blocks.len() / 8) {
+            let byte_bits = &shifted_msg_blocks[byte_idx * 8..(byte_idx + 1) * 8];
+            // Reverse: LE to BE
+            for bit in byte_bits.iter().rev() {
+                shifted_msg_blocks_be.push(bit.clone());
+            }
+        }
+
         let (day, month, year) = get_day_month_year_conditional(
             cs.namespace(|| "get birth day, month, year"),
-            &shifted_msg_blocks[0..DATE_LENGTH_BYTES * 8],
+            &shifted_msg_blocks_be[0..DATE_LENGTH_BYTES * 8],
             &flag_first_step,
         )?;
 

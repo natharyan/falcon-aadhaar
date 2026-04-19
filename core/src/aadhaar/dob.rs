@@ -33,7 +33,9 @@ where
     CS: ConstraintSystem<Scalar>,
 {
     // length of vector is 2^(3 + number of bits in shift_bits)
-    assert_eq!(1usize << (shift_bits.len() + 3), a.len());
+    // assert_eq!(1usize << (shift_bits.len() + 3), a.len());
+    assert_eq!(a.len() % 8, 0);
+    assert_eq!(1usize << (shift_bits.len() + 2), a.len() - 64);
 
     let mut a_without_shift_i = a.to_vec();
 
@@ -415,7 +417,7 @@ where
         DOB_INDEX_BIT_LENGTH,
     )?;
     Boolean::enforce_equal(
-        cs.namespace(|| "DoB field must lie completely in first 128 bytes"),
+        cs.namespace(|| "DoB field must lie completely in first SHAKE256 block"),
         &is_dob_in_first_block,
         &Boolean::Constant(true),
     )?;

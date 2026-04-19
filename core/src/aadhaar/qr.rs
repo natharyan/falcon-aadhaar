@@ -18,7 +18,6 @@ pub struct AadhaarQRData {
     pub rsa_signature: Vec<u8>,
     pub dob_byte_index: usize,
     pub falcon_sig: Signature,
-    pub s2: Polynomial,
     pub c: Polynomial,
     pub pk: PublicKey,
 }
@@ -61,9 +60,8 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
     let keypair = KeyPair::keygen();
     let seed = "UIDAI seed".as_ref();
     let sig_message = &qr_data[0..qr_data_len - 256];
-    let sig: falcon_rust::Signature = keypair.secret_key.sign_with_seed(seed, sig_message);
+    let sig: Signature = keypair.secret_key.sign_with_seed(seed, sig_message);
     let h: PublicKey = keypair.public_key;
-    let s2: Polynomial = (&sig).into();
     let c: Polynomial = Polynomial::from_hash_of_message(sig_message.as_ref(), sig.nonce());
 
     assert!(keypair.public_key.verify_rust(sig_message.as_ref(), &sig));
@@ -75,7 +73,6 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
         falcon_sig: sig, // falcon signature over all bytes except the last 256 bytes
         dob_byte_index,
         pk: h,
-        s2: s2,
         c: c,
     })
 }

@@ -7,7 +7,7 @@ use falcon_aadhaar::{
     age_proof::OP_CODE_LAST,
     qr::{parse_aadhaar_qr_data, AadhaarQRData},
 };
-use falcon_rust::KeyPair;
+use falcon_rust::{KeyPair, Polynomial, PublicKey};
 use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
 use nova_snark::traits::circuit::StepCircuit;
@@ -67,6 +67,34 @@ fn main() {
     let fields: Vec<&[u8]> = decompressed_qr_bytes.split(|&b| b == 0xFF).collect();
 
     println!("=== Aadhaar QR Fields ===");
+    
+    // println!("\n=== DoB Parsing Debug ===");
+    // let test_dob_index = {
+    //     let mut num_delimiters_seen = 0;
+    //     let mut i = 2;
+    //     while i < decompressed_qr_bytes.len() && num_delimiters_seen < 4 {
+    //         if decompressed_qr_bytes[i] == 0xFF {
+    //             num_delimiters_seen += 1;
+    //         }
+    //         i += 1;
+    //     }
+    //     i
+    // };
+    // println!("Calculated dob_byte_index: {}", test_dob_index);
+    // if test_dob_index + 10 <= decompressed_qr_bytes.len() {
+    //     let dob_bytes = &decompressed_qr_bytes[test_dob_index..test_dob_index + 10];
+    //     println!("DoB bytes (hex): {:02X?}", dob_bytes);
+    //     if let Ok(dob_str) = std::str::from_utf8(dob_bytes) {
+    //         println!("DoB as string: '{}'", dob_str);
+    //     }
+    //     println!("First byte: {} (should be 48-57 for '0'-'9')", dob_bytes[0]);
+    //     println!("All bytes as chars: {}", dob_bytes.iter().map(|&b| format!("{}", b as char)).collect::<String>());
+    // } else {
+    //     println!("ERROR: dob_byte_index + 10 exceeds buffer length!");
+    //     println!("Buffer length: {}, dob_byte_index: {}", decompressed_qr_bytes.len(), test_dob_index);
+    // }
+    // println!();
+    
     for (i, field) in fields.iter().enumerate() {
         // Try to display as UTF-8 string, skip binary fields (photo/signature)
         if let Ok(text) = std::str::from_utf8(field) {
@@ -99,8 +127,45 @@ fn main() {
         aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
     );
 
+    // println!("\n=== DoB Byte Index Debug ===");
+    // println!("Actual dob_byte_index from aadhaar_qr_data: {}", aadhaar_qr_data.dob_byte_index);
+    
+    // if aadhaar_qr_data.dob_byte_index + 10 <= decompressed_qr_bytes.len() {
+    //     let dob_bytes = &decompressed_qr_bytes[aadhaar_qr_data.dob_byte_index..aadhaar_qr_data.dob_byte_index + 10];
+    //     println!("DoB bytes (hex): {:02X?}", dob_bytes);
+    //     println!("DoB as string: '{}'", String::from_utf8_lossy(dob_bytes));
+    //     println!("First byte: {} (should be 48-57 for digit)", dob_bytes[0]);
+        
+    //     // Also check what's in the first 136-byte block that gets passed to circuit
+    //     println!("\nFirst 136 bytes of signed_data:");
+    //     let msg_block = &aadhaar_qr_data.signed_data[0..std::cmp::min(136, aadhaar_qr_data.signed_data.len())];
+    //     println!("Bytes 30-50 in first block:");
+    //     for i in 30..std::cmp::min(50, msg_block.len()) {
+    //         println!("  Index {}: 0x{:02X} = {}", i, msg_block[i], msg_block[i] as char);
+    //     }
+        
+    //     println!("\nBytes at DoB position (indices {}-{}) in first block:", 
+    //              aadhaar_qr_data.dob_byte_index, 
+    //              aadhaar_qr_data.dob_byte_index + 9);
+    //     for i in aadhaar_qr_data.dob_byte_index..std::cmp::min(aadhaar_qr_data.dob_byte_index + 10, msg_block.len()) {
+    //         println!("  Index {}: 0x{:02X} = {}", i, msg_block[i], msg_block[i] as char);
+    //     }
+    // } else {
+    //     println!("ERROR: dob_byte_index + 10 exceeds buffer!");
+    //     println!("Buffer length: {}, dob_byte_index: {}", decompressed_qr_bytes.len(), aadhaar_qr_data.dob_byte_index);
+    // }
+    
+    // println!("Number of bytes in QR code: {}",
+    //     aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
+    // );
 
-    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(aadhaar_qr_data.pk, aadhaar_qr_data.s2, aadhaar_qr_data.c);
+
+    // falcon signature on aadhaar_qr_data.signed_data
+    let h: PublicKey = aadhaar_qr_data.pk;
+    let s2: Polynomial = (&aadhaar_qr_data.falcon_sig).into();
+    let c: Polynomial = aadhaar_qr_data.c;
+
+    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(h, s2, c);
     let circuit_secondary: C2 = TrivialCircuit::default();
 
     let param_gen_timer = Instant::now();
@@ -160,6 +225,33 @@ fn main() {
             &z0_secondary,
         )
         .unwrap();
+
+    let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
+    for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
+        let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
+
+        let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
+            .iter()
+            .enumerate()
+            .map(|(j, val)| {
+                AllocatedNum::alloc(cs.namespace(|| format!("z_{}", j)), || Ok(*val)).unwrap()
+            })
+            .collect();
+
+        let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
+
+        if !cs.is_satisfied() {
+            println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
+            panic!("Constraint system not satisfied at step {}", i);
+        } else {
+            println!("Step {} OK", i,);
+        }
+
+        z_current = z_next_alloc
+            .iter()
+            .map(|v| v.get_value().unwrap())
+            .collect();
+    }
 
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
@@ -247,7 +339,7 @@ fn main() {
     let final_outputs = res.unwrap().0;
 
     let final_opcode = final_outputs[0];
-    assert_eq!(final_opcode, <E1 as Engine>::Scalar::from(OP_CODE_LAST + 1));
+    assert_eq!(final_opcode, <E1 as Engine>::Scalar::from(OP_CODE_LAST));
 
     println!("Nullifier = {:?}", final_outputs[3]);
 }
