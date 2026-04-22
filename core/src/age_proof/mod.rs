@@ -60,6 +60,7 @@ pub const OP_COEFF_INDEX_FIRST: u64 = 0;
 pub const OP_COEFF_INDEX_LAST: u64 = 512;
 pub const OP_CODE_LAST: u64 = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_LAST;
 pub const L2_NORM_INIT: u64 = 0;
+pub const NONCE_LENGTH_BYTES: usize = 40;
 
 const DATE_LENGTH_BYTES: usize = 10;
 const TIMESTAMP_START_BYTE_INDEX: usize = 9;
@@ -140,6 +141,11 @@ where
     ) -> Vec<Scalar> {
         let initial_opcode = Scalar::from((OP_SHAKE256_ACTIVE << NUM_OPCODE_BITS) + OP_COEFF_INDEX_FIRST);
 
+        assert!(
+            msg.len() >= NONCE_LENGTH_BYTES,
+            "Expected nonce-prefixed Falcon message"
+        );
+
         let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&msg);
 
         let ctx_inject: [bool; 1600] = library_shake256_inject(
@@ -153,7 +159,8 @@ where
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
         let hash_inject = inject_hasher.hash(&ctx_inject_packed);
 
-        let c: Polynomial = Polynomial::from_hash_of_message(msg.as_ref(), sig.nonce());
+        let c_msg = &msg[NONCE_LENGTH_BYTES..];
+        let c: Polynomial = Polynomial::from_hash_of_message(c_msg, sig.nonce());
         let c_scalars: Vec<Scalar> = c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
         let hash_c = c_hasher.hash(&c_scalars);
@@ -179,11 +186,11 @@ where
     ) -> Vec<AadhaarAgeProofCircuit<Scalar>> {
         let mut aadhaar_steps: Vec<AadhaarAgeProofCircuit<Scalar>> = vec![];
 
-        let signed_msg: Vec<u8> = aadhaar_qr_data.signed_data.clone();
-        let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&signed_msg);
+        let falcon_msg: Vec<u8> = aadhaar_qr_data.falcon_msg.clone();
+        let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&falcon_msg);
 
         let s2: Polynomial = sig.into();
-        let c: Polynomial = Polynomial::from_hash_of_message(signed_msg.as_ref(), sig.nonce());
+        let c: Polynomial = Polynomial::from_hash_of_message(aadhaar_qr_data.signed_data.as_ref(), sig.nonce());
         let pk_poly: Polynomial = (&pk).into();
 
         let mut prev_nullifier = Scalar::ZERO; // App_ID set as 0 for now
@@ -198,7 +205,7 @@ where
 
         let ctx_inject: [bool; 1600] = library_shake256_inject(
             [false; 1600],
-            signed_msg.clone(),
+            falcon_msg.clone(),
         );
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
@@ -232,7 +239,7 @@ where
             c: c.clone(),
         });
 
-        prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &signed_msg);
+        prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &falcon_msg);
 
         let num_blocks = msg_blocks.len();
         println!("Number of SHAKE256.inject steps: {}", num_blocks);
@@ -325,7 +332,7 @@ where
                 c: c.clone(),
             });
             
-            prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &signed_msg);
+            prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &falcon_msg);
         }
 
         aadhaar_steps
@@ -910,7 +917,7 @@ where
         )?;
 
 
-        // TODO confirm about lack of intra-application linkability via io_hash
+        // TODO confirm about lack of intra-application linkability via io_hash - ensured by nullifier(msg_without_timestamp, app_id) in the last step
         // let mut msg_without_timestamp: Vec<Boolean> = vec![];
         // for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
         //     msg_without_timestamp.push(msg_vars[i].clone());

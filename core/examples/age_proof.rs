@@ -121,6 +121,8 @@ fn main() {
     if !res.is_ok() {
         panic!("Error parsing Aadhaar QR code bytes")
     }
+    
+    // signed_data is the Falcon payload (AadhaarQR[0..n-256]); falcon_msg is nonce||signed_data.
     let aadhaar_qr_data: AadhaarQRData = res.unwrap();
     println!(
         "Number of bytes in QR code: {}",
@@ -208,7 +210,7 @@ fn main() {
 
     let z0_primary = C1::calc_initial_primary_circuit_input(
         current_date_bytes,
-        &aadhaar_qr_data.signed_data,
+        &aadhaar_qr_data.falcon_msg,
         &aadhaar_qr_data.falcon_sig,
     ); // initial_opcode, current_date_scalar
     let z0_secondary = vec![<E2 as Engine>::Scalar::zero()];
@@ -281,7 +283,6 @@ fn main() {
         start.elapsed()
     );
     assert!(res.is_ok());
-    // TODO store snark proof in a json file.
 
     // produce a compressed SNARK
     println!("Generating a CompressedSNARK using Spartan with IPA-PC...");

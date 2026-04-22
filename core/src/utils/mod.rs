@@ -493,7 +493,6 @@ where
 
 /// Constraint that the witness of a is smaller than 34034726
 /// Cost: 47 constraints.
-/// (This improves the range proof of 1264 constraints as in Arkworks.)    
 pub(crate) fn enforce_less_than_norm_bound<CS, Scalar>(
     mut cs: CS,
     a: &AllocatedNum<Scalar>,

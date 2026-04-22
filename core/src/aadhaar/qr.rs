@@ -12,9 +12,11 @@ const CHAR_5: u8 = 53; // Corresponds to "5"
 pub const DOB_LENGTH_BYTES: usize = 10; // Date of birth is in DD-MM-YYYY format
 pub const NUM_DELIMITERS_BEFORE_DOB: usize = 4; // Date of birth is the 4th field in the QR code data
 pub const DATA_LENGTH_PER_STEP: usize = 136; // 136 bytes will be hashed per Nova step
+pub const NONCE_LENGTH_BYTES: usize = 40; // Falcon nonce length (signature bytes [1..41))
 
 pub struct AadhaarQRData {
     pub signed_data: Vec<u8>,
+    pub falcon_msg: Vec<u8>,
     pub rsa_signature: Vec<u8>,
     pub dob_byte_index: usize,
     pub falcon_sig: Signature,
@@ -50,10 +52,11 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
         }
     }
     let dob_byte_index = i;
-    if dob_byte_index + DOB_LENGTH_BYTES - 1 >= DATA_LENGTH_PER_STEP {
-        // Circuit assumes that the date of birth is contained in the first 128 bytes
-        // This requires the holder's Name to fit in 89 characters
-        return Err(Error::other("Date of birth is not in first 128 bytes"));
+    let dob_byte_index_with_nonce = dob_byte_index + NONCE_LENGTH_BYTES;
+    if dob_byte_index_with_nonce + DOB_LENGTH_BYTES - 1 >= DATA_LENGTH_PER_STEP {
+        // Circuit expects nonce||payload and reads DoB in the first 136-byte block.
+        // This requires the holder's Name to fit in fewer characters than payload-only mode.
+        return Err(Error::other("Date of birth is not in first SHAKE block after nonce prefix"));
     }
 
     // TODO replace this with actual qr codes with signed data.
@@ -63,15 +66,18 @@ pub fn parse_aadhaar_qr_data(qr_data: Vec<u8>) -> Result<AadhaarQRData, Error> {
     let sig: Signature = keypair.secret_key.sign_with_seed(seed, sig_message);
     let h: PublicKey = keypair.public_key;
     let c: Polynomial = Polynomial::from_hash_of_message(sig_message.as_ref(), sig.nonce());
+    let mut falcon_msg = sig.nonce().to_vec();
+    falcon_msg.extend_from_slice(sig_message);
 
     assert!(keypair.public_key.verify_rust(sig_message.as_ref(), &sig));
     println!("Falcon signature verification PASSED!");
 
     Ok(AadhaarQRData {
-        signed_data: qr_data[0..qr_data_len - 256].to_vec(), // All bytes except last 256 are signed
+        signed_data: qr_data[0..qr_data_len - 256].to_vec(), // Payload bytes signed by Falcon (without nonce)
+        falcon_msg, // nonce||payload used by Falcon HashToPoint
         rsa_signature: qr_data[qr_data_len - 256..].to_vec(), // Last 256 bytes have the RSA signature
         falcon_sig: sig, // falcon signature over all bytes except the last 256 bytes
-        dob_byte_index,
+        dob_byte_index: dob_byte_index_with_nonce,
         pk: h,
         c: c,
     })
