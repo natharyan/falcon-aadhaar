@@ -677,7 +677,6 @@ pub(crate) fn normalize_coeff(val: i64) -> u64 {
 }
 
 /// Takes a sequence of booleans and exposes them as compact Nums per field-capacity chunk (little-endian)
-/// bits = ctx_absorb
 pub(crate) fn pack_bits_scalars<Scalar, CS>(
     mut cs: CS,
     bits: &[Boolean],
@@ -686,10 +685,7 @@ where
     Scalar: PrimeField,
     CS: ConstraintSystem<Scalar>,
 {
-    if bits.len() != 1600 {
-        return Err(SynthesisError::Unsatisfiable);
-    }
-
+    
     let mut packed = Vec::with_capacity(
         (bits.len() + (Scalar::CAPACITY as usize) - 1) / (Scalar::CAPACITY as usize),
     );

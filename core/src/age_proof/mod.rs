@@ -6,7 +6,7 @@ use crate::{
         SHAKE256_BLOCK_LENGTH_BITS, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, keccak_f_1600, library_shake256_inject, library_step_sponge, shake256_gadget, shake256_inject, shake256_msg_blocks, shake256_pad101
     },
     ntt::{inv_ntt, inv_ntt_deferred_circuit, ntt, ntt_deferred_circuit, ntt_mult_const_p2},
-    qr::{AadhaarQRData, parse_aadhaar_qr_data},
+    qr::{AadhaarQRData, NONCE_LENGTH_BYTES, parse_aadhaar_qr_data},
     subarray::var_shift_left,
     utils::{
         bits_to_bytes_le, bytes_to_bits_le, enforce_less_than_norm_bound, mod_q, normalize_coeff,
@@ -60,7 +60,6 @@ pub const OP_COEFF_INDEX_FIRST: u64 = 0;
 pub const OP_COEFF_INDEX_LAST: u64 = 512;
 pub const OP_CODE_LAST: u64 = (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_LAST;
 pub const L2_NORM_INIT: u64 = 0;
-pub const NONCE_LENGTH_BYTES: usize = 40;
 
 const DATE_LENGTH_BYTES: usize = 10;
 const TIMESTAMP_START_BYTE_INDEX: usize = 9;
@@ -79,9 +78,7 @@ where
     s2: Polynomial,
     c: Polynomial,
     h: PublicKey,
-    hash_c: Scalar,
     ctx_inject_packed: [Scalar; 7],
-    hash_inject: Scalar,
     ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
     dob_byte_index: usize,
     prev_nullifier: Scalar,
@@ -101,37 +98,59 @@ where
             s2: s2,
             c: c,
             h: h,
-            hash_c: Scalar::ZERO,
             ctx_inject_packed: [Scalar::ZERO; 7],
-            hash_inject: Scalar::ZERO,
             ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
             dob_byte_index: 0,
             prev_nullifier: Scalar::default(),
         }
     }
 
+    // fn update_nullifier(
+    //     prev_nullifier: Scalar,
+    //     l2_norm_sum: u64,
+    //     ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
+    //     msg: &Vec<u8>,
+    // ) -> Scalar {
+    //     let ctx_inject: [bool; 1600] = library_shake256_inject(
+    //         [false; 1600],
+    //         msg.clone(),
+    //     );
+    //     let ctx_inject_packed = compute_multipacking::<Scalar>(&ctx_inject);
+    //     assert!(ctx_inject_packed.len() == 7);
+    //     let ctx_absorb_packed = compute_multipacking::<Scalar>(&ctx_absorb);
+    //     let mut nullifier_preimage = ctx_inject_packed.clone();
+    //     nullifier_preimage.push(Scalar::from(l2_norm_sum));
+    //     nullifier_preimage.extend(ctx_absorb_packed);
+    //     nullifier_preimage.push(prev_nullifier);
+    //     let hasher_nullifier =
+    //         PoseidonHasher::<Scalar>::new(nullifier_preimage.len() as u32);
+    //     let next_nullifier = hasher_nullifier.hash(&nullifier_preimage);
+
+    //     next_nullifier
+    // }
     fn update_nullifier(
         prev_nullifier: Scalar,
-        l2_norm_sum: u64,
-        ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
-        msg: &Vec<u8>,
+        msg: &[u8],
+        is_first: bool,
     ) -> Scalar {
-        let ctx_inject: [bool; 1600] = library_shake256_inject(
-            [false; 1600],
-            msg.clone(),
-        );
-        let ctx_inject_packed = compute_multipacking::<Scalar>(&ctx_inject);
-        assert!(ctx_inject_packed.len() == 7);
-        let ctx_absorb_packed = compute_multipacking::<Scalar>(&ctx_absorb);
-        let mut nullifier_preimage = ctx_inject_packed.clone();
-        nullifier_preimage.push(Scalar::from(l2_norm_sum));
-        nullifier_preimage.extend(ctx_absorb_packed);
-        nullifier_preimage.push(prev_nullifier);
-        let hasher_nullifier =
-            PoseidonHasher::<Scalar>::new(nullifier_preimage.len() as u32);
-        let next_nullifier = hasher_nullifier.hash(&nullifier_preimage);
+        let mut block;
+        if is_first {
+            // Remove the first 40 bytes corresponding to the Falcon nonce
+            block = msg[NONCE_LENGTH_BYTES..].to_vec();
+            // Mask timestamp bytes
+            for j in TIMESTAMP_START_BYTE_INDEX..NAME_START_BYTE_INDEX {
+                block[j] = 0;
+            }
+        } else {
+            block = msg.to_vec();
+        }
 
-        next_nullifier
+        let block_bits: Vec<bool> = bytes_to_bits_le(&block);
+        let block_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&block_bits);
+        let mut preimage = vec![prev_nullifier];
+        preimage.extend(block_packed);
+        let hasher = PoseidonHasher::<Scalar>::new(preimage.len() as u32);
+        hasher.hash(&preimage)
     }
 
     pub fn calc_initial_primary_circuit_input(
@@ -188,9 +207,10 @@ where
 
         let falcon_msg: Vec<u8> = aadhaar_qr_data.falcon_msg.clone();
         let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&falcon_msg);
+        let signed_msg: Vec<u8> = falcon_msg[NONCE_LENGTH_BYTES..].to_vec();
 
         let s2: Polynomial = sig.into();
-        let c: Polynomial = Polynomial::from_hash_of_message(aadhaar_qr_data.signed_data.as_ref(), sig.nonce());
+        let c: Polynomial = Polynomial::from_hash_of_message(&signed_msg, sig.nonce());
         let pk_poly: Polynomial = (&pk).into();
 
         let mut prev_nullifier = Scalar::ZERO; // App_ID set as 0 for now
@@ -231,15 +251,14 @@ where
             l2_norm_sum: l2_norm_sum,
             ctx_absorb: ctx_absorb.clone(),
             ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
-            hash_inject: hash_inject,
             s2: s2.clone(),
             prev_nullifier: prev_nullifier,
             h: pk.clone(),
-            hash_c: hash_c,
             c: c.clone(),
         });
 
-        prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &falcon_msg);
+        // prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &falcon_msg);
+        prev_nullifier = Self::update_nullifier(prev_nullifier, &msg_blocks[0], true);
 
         let num_blocks = msg_blocks.len();
         println!("Number of SHAKE256.inject steps: {}", num_blocks);
@@ -324,15 +343,14 @@ where
                 l2_norm_sum: l2_norm_sum,
                 ctx_absorb: ctx_absorb.clone(),
                 ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
-                hash_inject: hash_inject,
                 s2: s2.clone(),
                 prev_nullifier: prev_nullifier,
                 h: pk.clone(),
-                hash_c: hash_c,
                 c: c.clone(),
             });
             
-            prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &falcon_msg);
+            // prev_nullifier = Self::update_nullifier(prev_nullifier, l2_norm_sum, ctx_absorb, &falcon_msg);
+            prev_nullifier = Self::update_nullifier(prev_nullifier, &msg_blocks[i % num_blocks], false);
         }
 
         aadhaar_steps
@@ -355,7 +373,7 @@ where
         let opcode = &z[0];
         let hash_c = &z[1];
         let cur_shake_block = &z[2];
-        let nullifier = &z[3];
+        let io_hash = &z[3];
 
         let s2_vars = self
             .s2
@@ -390,8 +408,8 @@ where
         let mut ctx_absorb_vars: Vec<Boolean> = vec![];
         
         // enforce consistency of ctx_inject, l2_norm_sum, ctx_absorb
-        let mut nullifier_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
-        nullifier_preimage.push(l2_norm_sum_var.clone());
+        let mut io_hash_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
+        io_hash_preimage.push(l2_norm_sum_var.clone());
         for (i, &b) in self.ctx_absorb.iter().enumerate() {
             let ctx_absorb_bit = Boolean::from(AllocatedBit::alloc(
                 cs.namespace(|| format!("ctx_absorb bit {i}")),
@@ -405,14 +423,14 @@ where
             &ctx_absorb_vars,
         )?;
         for (i, ctx_absorb_packed_scalar) in ctx_absorb_packed.iter().enumerate() {
-            nullifier_preimage.push(ctx_absorb_packed_scalar.clone());
+            io_hash_preimage.push(ctx_absorb_packed_scalar.clone());
         }
-        nullifier_preimage.push(prev_nullifier_var);
+        io_hash_preimage.push(prev_nullifier_var.clone());
         
-        let nullifier_hasher = PoseidonHasher::<Scalar>::new(nullifier_preimage.len() as u32);
-        let nullifier_calculated = nullifier_hasher.hash_in_circuit(
+        let io_hasher = PoseidonHasher::<Scalar>::new(io_hash_preimage.len() as u32);
+        let io_hash_calculated = io_hasher.hash_in_circuit(
             &mut cs.namespace(|| "poseidon hash nullifier preimage nullifier_calculated"),
-            &nullifier_preimage,
+            &io_hash_preimage,
         )?;
 
         let msg: [u8; 136] = self.msg;
@@ -528,8 +546,8 @@ where
 
         let nullifier_equal = alloc_num_equals(
             cs.namespace(|| "nullifier consistency check"),
-            &nullifier_calculated,
-            nullifier,
+            &io_hash_calculated,
+            io_hash,
         )?;
         boolean_implies(
             cs.namespace(|| "not first step implies nullifier consistency check"),
@@ -904,64 +922,50 @@ where
             &flag_at_max,
         )?;
 
-        // constrain the next nullifier
-        let mut next_nullifier_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
-        next_nullifier_preimage.push(l2_norm_sum_var);
-        next_nullifier_preimage.extend(ctx_absorb_packed_vars);
-        next_nullifier_preimage.push(nullifier_calculated.clone());
+        // remove nonce bytes, then mask timestamp bytes.
+        let mut msg_without_timestamp_nonce: Vec<Boolean> =
+            msg_vars[NONCE_LENGTH_BYTES * 8..].to_vec();
+        for byte_idx in TIMESTAMP_START_BYTE_INDEX..NAME_START_BYTE_INDEX {
+            let base = byte_idx * 8;
+            for bit_idx in 0..8 {
+                msg_without_timestamp_nonce[base + bit_idx] = Boolean::Constant(false);
+            }
+        }
+
+        let mut temp_nullifier_1_preimage = vec![prev_nullifier_var.clone()];
+        temp_nullifier_1_preimage.extend(
+            pack_bits_scalars(cs.namespace(|| "pack msg_m"), &msg_without_timestamp_nonce)?
+        );
+        let temp_nullifier_1_hasher = PoseidonHasher::<Scalar>::new(temp_nullifier_1_preimage.len() as u32);
+        let temp_nullifier_1 = temp_nullifier_1_hasher.hash_in_circuit(
+            &mut cs.namespace(|| "hash temp nullifier 1"), &temp_nullifier_1_preimage)?;
+
+        let mut temp_nullifier_2_preimage = vec![prev_nullifier_var.clone()];
+        temp_nullifier_2_preimage.extend(
+            pack_bits_scalars(cs.namespace(|| "pack msg_r"), msg_vars.as_ref())?
+        );
+        let temp_nullifier_2_hasher = PoseidonHasher::<Scalar>::new(temp_nullifier_2_preimage.len() as u32);
+        let temp_nullifier_2 = temp_nullifier_2_hasher.hash_in_circuit(
+            &mut cs.namespace(|| "hash temp nullifier 2"), &temp_nullifier_2_preimage)?;
         
-        let next_nullifier_hasher = PoseidonHasher::<Scalar>::new(next_nullifier_preimage.len() as u32);
-        let next_nullifier = next_nullifier_hasher.hash_in_circuit(
-            &mut cs.namespace(|| "poseidon hash nullifier preimage next_nullifier"),
-            &next_nullifier_preimage,
+        // constrain the next nullifier
+        let next_nullifier = conditionally_select(
+            cs.namespace(|| "next_nullifier conditional select"),
+            &temp_nullifier_1,
+            &temp_nullifier_2,
+            &flag_first_step,
         )?;
 
-
-        // TODO confirm about lack of intra-application linkability via io_hash - ensured by nullifier(msg_without_timestamp, app_id) in the last step
-        // let mut msg_without_timestamp: Vec<Boolean> = vec![];
-        // for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
-        //     msg_without_timestamp.push(msg_vars[i].clone());
-        // }
-        // for _i in TIMESTAMP_START_BYTE_INDEX * 8..NAME_START_BYTE_INDEX * 8 {
-        //     msg_without_timestamp.push(Boolean::Constant(false));
-        // }
-        // for i in NAME_START_BYTE_INDEX * 8..SHAKE256_BLOCK_LENGTH_BITS {
-        //     msg_without_timestamp.push(msg_vars[i].clone());
-        // }
-
-        // let mut two_sha256_msg_blocks_without_timestamp = vec![];
-        // for i in 0..TIMESTAMP_START_BYTE_INDEX * 8 {
-        //     two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
-        // }
-        // for _i in TIMESTAMP_START_BYTE_INDEX * 8..NAME_START_BYTE_INDEX * 8 {
-        //     two_sha256_msg_blocks_without_timestamp.push(Boolean::Constant(false));
-        // }
-        // for i in NAME_START_BYTE_INDEX * 8..2 * SHA256_BLOCK_LENGTH_BYTES * 8 {
-        //     two_sha256_msg_blocks_without_timestamp.push(two_sha256_msg_blocks[i].clone());
-        // }
-
-
-        // let nullifier_hasher = PoseidonHasher::<Scalar>::new(1 +  msg_without_timestamp.len() as u32);
-        // let mut temp_nullifier_1_preimage = msg_without_timestamp.iter().map(|&b| Scalar::from(b as u64)).collect::<Vec<Scalar>>();
-        // temp_nullifier_1_preimage.insert(0, prev_nullifier.clone());
-        // let temp_nullifier_1_preimage_vars = temp_nullifier_1_preimage.iter().enumerate().map(|(i, &x)| {
-        //     AllocatedNum::alloc(cs.namespace(|| format!("temp nullifier 1 preimage {}", i)), || Ok(x))
-        // }).collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
-        // let mut temp_nullifier_2_preimage = self.msg.iter().map(|&b| Scalar::from(b as u64)).collect::<Vec<Scalar>>();
-        // temp_nullifier_2_preimage.insert(0, prev_nullifier.clone());
-        // let temp_nullifier_2_preimage_vars = temp_nullifier_2_preimage.iter().enumerate().map(|(i, &x)| {
-        //     AllocatedNum::alloc(cs.namespace(|| format!("temp nullifier 2 preimage {}", i)), || Ok(x))
-        // }).collect::<Result<Vec<AllocatedNum<Scalar>>, SynthesisError>>()?;
-        // let next_nullifier_preimage = conditionally_select_vec(
-        //     cs.namespace(|| "nullifier preimage selection"),
-        //     &temp_nullifier_1_preimage_vars,
-        //     &temp_nullifier_2_preimage_vars,
-        //     &flag_first_step,
-        // )?;
-        // let next_nullifier = nullifier_hasher.hash_in_circuit(
-        //     &mut cs.namespace(|| "hash nullifier preimage"),
-        //     &next_nullifier_preimage,
-        // )?;
+        let mut next_io_hash_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
+        next_io_hash_preimage.push(l2_norm_sum_var);
+        next_io_hash_preimage.extend(ctx_absorb_packed_vars);
+        next_io_hash_preimage.push(next_nullifier.clone());
+        
+        let next_io_hasher = PoseidonHasher::<Scalar>::new(next_io_hash_preimage.len() as u32);
+        let next_io_hash = next_io_hasher.hash_in_circuit(
+            &mut cs.namespace(|| "poseidon hash nullifier preimage next_nullifier"),
+            &next_io_hash_preimage,
+        )?;
 
         // enforce age > 18
         let dob_byte_index =
@@ -1037,18 +1041,32 @@ where
             &flag_first_step,
             &age_gte_18,
         )?;
-
-        // let z_out = conditionally_select_vec(
-        //     cs.namespace(|| "Choose between outputs of last opcode and others"),
-        //     &last_z_out,
-        //     &[next_opcode, hash_c.clone(), next_shake_inject_m_block, next_nullifier],
-        //     &flag_final_step,
-        // )?;
-        Ok(vec![
+        
+        let flag_last_step = Boolean::and(
+            cs.namespace(|| "final step flag"),
+            &flag_absorb_last_step,
+            &flag_coeff.not(),
+        )?;
+        
+        let last_z_out = vec![
             next_opcode.clone(),
             hash_c.clone(),
             shake_block_next.clone(),
             next_nullifier.clone(),
-        ])
+        ];
+
+        let z_out = conditionally_select_vec(
+            cs.namespace(|| "Choose between outputs of last opcode and others"),
+            &last_z_out,
+            &vec![
+                    next_opcode.clone(),
+                    hash_c.clone(),
+                    shake_block_next.clone(),
+                    next_io_hash.clone(),
+                ],
+            &flag_last_step,
+        )?;
+
+        Ok(z_out)
     }
 }
