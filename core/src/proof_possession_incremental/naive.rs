@@ -508,19 +508,19 @@ where
         )?;
 
         // Norm bound check
-        let var_512 = alloc_constant(cs.namespace(|| "const_512"), Scalar::from(512u64))?;
-        let flag_coeff: Boolean = less_than(
-            cs.namespace(|| "coeff_lt_512"),
-            &coeff_index_var,
-            &var_512,
-            LOG_N + 1,
-        )?;
+        // let var_512 = alloc_constant(cs.namespace(|| "const_512"), Scalar::from(512u64))?;
+        // let flag_coeff: Boolean = less_than(
+        //     cs.namespace(|| "coeff_lt_512"),
+        //     &coeff_index_var,
+        //     &var_512,
+        //     LOG_N + 1,
+        // )?;
         let flag_norm_bound: Boolean =
             enforce_less_than_norm_bound(cs.namespace(|| "norm_bound"), &l2_norm_sum_var)?;
-        let res: Boolean = Boolean::or(cs.namespace(|| "flag_or"), &flag_coeff, &flag_norm_bound)?;
+        // let res: Boolean = Boolean::or(cs.namespace(|| "flag_or"), &flag_coeff, &flag_norm_bound)?;
         Boolean::enforce_equal(
             cs.namespace(|| "or_is_true"),
-            &res,
+            &flag_norm_bound,
             &Boolean::Constant(true),
         )?;
 

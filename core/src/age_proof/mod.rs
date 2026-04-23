@@ -42,15 +42,6 @@ use num_bigint::{BigInt, Sign};
 use sha2::{compress256, digest::generic_array::GenericArray};
 use std::{cmp::max, ops::Mul};
 
-// pub const NUM_OPCODE_BITS: usize = 6; // 1 MSB for SHA256 + 5 LSBs for RSA
-// pub const NUM_RSA_OPCODE_BITS: u64 = 5;
-// pub const RSA_OPCODE_MASK: u64 = (1 << NUM_RSA_OPCODE_BITS) - 1;
-// pub const OP_SHA256_ACTIVE: u64 = 0;
-// pub const OP_SHA256_NOOP: u64 = 1;
-// pub const OP_RSA_FIRST: u64 = 0;
-// pub const OP_RSA_LAST: u64 = 16;
-// pub const OP_CODE_LAST: u64 = (OP_SHA256_NOOP << NUM_RSA_OPCODE_BITS) + OP_RSA_LAST;
-
 pub const NUM_OPCODE_BITS: usize = 11; // 1 MSB for SHAKE256 + 10 LSBs for COEFF_INDEX
 pub const NUM_COEFF_INDEX_BITS: u64 = 10; // COEFF_INDEX <= 512
 pub const COEFF_INDEX_MASK: u64 = (1 << NUM_COEFF_INDEX_BITS) - 1;
@@ -158,7 +149,7 @@ where
         msg: &Vec<u8>,
         sig: &Signature,
     ) -> Vec<Scalar> {
-        let initial_opcode = Scalar::from((OP_SHAKE256_ACTIVE << NUM_OPCODE_BITS) + OP_COEFF_INDEX_FIRST);
+        let initial_opcode = Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
 
         assert!(
             msg.len() >= NONCE_LENGTH_BYTES,
@@ -176,7 +167,6 @@ where
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
         // println!("ctx_inject_packed len: {}", ctx_inject_packed.len());
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
-        let hash_inject = inject_hasher.hash(&ctx_inject_packed);
 
         let c_msg = &msg[NONCE_LENGTH_BYTES..];
         let c: Polynomial = Polynomial::from_hash_of_message(c_msg, sig.nonce());
@@ -189,7 +179,6 @@ where
         assert_eq!(current_date_scalars.len(), 1);
         let current_date_scalar = current_date_scalars[0];
 
-        // The last scalar corresponds to the current date
         vec![
             initial_opcode,
             hash_c,
@@ -215,7 +204,7 @@ where
 
         let mut prev_nullifier = Scalar::ZERO; // App_ID set as 0 for now
 
-        let mut opcode = (OP_SHAKE256_ACTIVE << NUM_OPCODE_BITS) + OP_COEFF_INDEX_FIRST;
+        let mut opcode = (OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST;
         let mut next_opcode = if msg_blocks.len() == 1 {
             (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + (OP_COEFF_INDEX_FIRST) + 64
         } else {
@@ -232,11 +221,9 @@ where
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
         assert!(ctx_inject_packed.len() == 7);
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
-        let hash_inject = inject_hasher.hash(&ctx_inject_packed);
 
         let c_scalars: Vec<Scalar> = c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
-        let hash_c = c_hasher.hash(&c_scalars);
 
         let mut ctx_absorb = [false; 1600];
         let mut l2_norm_sum = 0u64;
@@ -327,9 +314,8 @@ where
                 (OP_SHAKE256_NO_OP << NUM_COEFF_INDEX_BITS) + next_coeff
             };
 
-            // once coeff_index == 512, next_opcode remains the same.
+            // once coeff_index > 512, next_opcode remains the same.
             if coeff_index > OP_COEFF_INDEX_LAST {
-                // next_opcode = next_opcode - 64;
                 next_opcode = temp_next_opcode;
                 coeff_index = OP_COEFF_INDEX_LAST;
             }
@@ -735,33 +721,6 @@ where
             LOG_N + 1,
         )?;
 
-        // l2_norm_sum_var = l2_norm_sum_var.add(
-        //     cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_update"),
-        //     &sum_aggregated,
-        // )?;
-        // boolean_implies flag_coeff to num_alloc_equals(next_coeff_index, coeff_index)
-        // let coeff_eq = alloc_num_equals(cs.namespace(|| "next_coeff_index equals coeff_index"), &next_coeff_index, &coeff_index)?;
-        // boolean_implies(
-        //     cs.namespace(|| "flag_coeff implies next_coeff_index = coeff_index"),
-        //     &flag_coeff,
-        //     &coeff_eq,
-        // )?;
-        // // no trait for allocatednum.sub constraint coeff_index_minus_64. First alloc and then constrain
-        // let coeff_index_minus_64 = AllocatedNum::alloc(
-        //     cs.namespace(|| "coeff_index_minus_64"),
-        //     || {
-        //         let coeff_index_value = coeff_index.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-        //         Ok(coeff_index_value - Scalar::from(64u64))
-        //     },
-        // )?;
-
-        // let coeff_eq_64 = alloc_num_equals(cs.namespace(|| "next_coeff_index equals coeff_index_minus_64"), &next_coeff_index, &coeff_index_minus_64)?;
-        // boolean_implies(
-        //     cs.namespace(|| "flag_coeff implies next_coeff_index = coeff_index - 64"),
-        //     &flag_coeff.not(),
-        //     &coeff_eq_64,
-        // )?;
-
         let min_512_coeff_index = conditionally_select(
             cs.namespace(|| "next_coeff_index conditional select"),
             &coeff_index_after,
@@ -830,62 +789,43 @@ where
             &flag_final_absorb,
         )?;
 
-        // self.coeff_index <= 512, so self.coeff_index / 64 is in the range [0, 8]
         let step_i_val = (self.coeff_index / 64) % 7;
-        let step_i = AllocatedNum::alloc(cs.namespace(|| "step_i"), || Ok(Scalar::from(step_i_val)))?;
+        let step_i = AllocatedNum::alloc(
+            cs.namespace(|| "step_i"),
+            || Ok(Scalar::from(step_i_val)),
+        )?;
 
-        // Allocate min(coeff_index_init, 448) in-circuit
-        // let var_448 = alloc_constant(cs.namespace(|| "const_448"), Scalar::from(448u64))?;
-        // let flag_coeff_init_leq_448 = less_than_or_equal(
-        //     cs.namespace(|| "coeff_index_init <= 448"),
-        //     &coeff_index_init,
-        //     &var_448,
-        //     LOG_N + 1,
-        // )?;
-        // let coeff_index_init_capped = conditionally_select(
-        //     cs.namespace(|| "min(coeff_index_init, 448)"),
-        //     &coeff_index_init,
-        //     &var_448,
-        //     &flag_coeff_init_leq_448,
-        // )?;
-
-        let q_val = (self.coeff_index / 64) / 7; // 0 for ci<448, 1 for ci>=448
-        let q = AllocatedNum::alloc(cs.namespace(|| "step_i_q"), || Ok(Scalar::from(q_val)))?;
+        // q = (coeff_index/64) / 7  =>  0 for coeff_index < 448, 1 for >= 448
+        let q_val = (self.coeff_index / 64) / 7;
+        let q = AllocatedNum::alloc(
+            cs.namespace(|| "step_i_q"),
+            || Ok(Scalar::from(q_val)),
+        )?;
 
         // 1-bit range check for q
         let _ = num_to_bits(cs.namespace(|| "q_bits"), &q, 1)?;
 
-        // 3-bit range check for step_i (unchanged)
+        // 3-bit range check for step_i
         let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
 
-        // Enforce: step_i * 64 = min(coeff_index_init, 448)
+        // coeff_index = 64*step_i + 448*q   (448 = 7*64)
         cs.enforce(
             || "64 * step_i + 448 * q = coeff_index_init",
-            |lc| lc + (Scalar::from(64u64), step_i.get_variable()) + (Scalar::from(448u64), q.get_variable()),
+            |lc| lc
+                + (Scalar::from(64u64),  step_i.get_variable())
+                + (Scalar::from(448u64), q.get_variable()),
             |lc| lc + CS::one(),
             |lc| lc + coeff_index_init.get_variable(),
         );
 
-        let const_zero = alloc_constant(cs.namespace(|| "const_0"), Scalar::ZERO)?;
-        let const_seven = alloc_constant(cs.namespace(|| "const_7"), Scalar::from(7u64))?;
-
-        let step_eq_7: Boolean =
-            alloc_num_equals_constant(cs.namespace(|| "step_eq_7"), &step_i, Scalar::from(7u64))?;
-        let step_i_mod7 = conditionally_select(
-            cs.namespace(|| "step_i_mod7"),
-            &const_zero,
-            &step_i,
-            &step_eq_7,
-        )?;
-
-        // Constrain cur_shake_block == ctx_inject_packed[step_i_mod7]
+        // cur_shake_block must equal ctx_inject_packed[step_i]
         let cur_expected = select_from_vec_linear(
             cs.namespace(|| "sel_cur_shake"),
             &ctx_inject_packed_vars,
-            &step_i_mod7,
+            &step_i,
         )?;
         cs.enforce(
-            || "cur_shake_block == ctx_inject_packed[step_i_mod7]",
+            || "cur_shake_block == ctx_inject_packed[step_i]",
             |lc| lc + cur_expected.get_variable() - cur_shake_block.get_variable(),
             |lc| lc + CS::one(),
             |lc| lc,
@@ -896,14 +836,17 @@ where
             &coeff_index_init,
             Scalar::from(512u64),
         )?;
-        let step_plus1 = step_i_mod7.add(cs.namespace(|| "step_plus1"), &var1)?;
-        let step_plus1_eq_7: Boolean = alloc_num_equals_constant(
+
+        // next_idx = (step_i + 1) % 7
+        let const_zero = alloc_constant(cs.namespace(|| "const_0"), Scalar::ZERO)?;
+        let step_plus1 = step_i.add(cs.namespace(|| "step_plus1"), &var1)?;
+        let step_plus1_eq_7 = alloc_num_equals_constant(
             cs.namespace(|| "step_plus1_eq_7"),
             &step_plus1,
             Scalar::from(7u64),
         )?;
         let next_idx = conditionally_select(
-            cs.namespace(|| "next_idx"),
+            cs.namespace(|| "next_idx = step_plus1==7 ? 0 : step_plus1"),
             &const_zero,
             &step_plus1,
             &step_plus1_eq_7,
@@ -915,6 +858,7 @@ where
             &next_idx,
         )?;
 
+        // If coeff_index==512, freeze block index else increment
         let shake_block_next = conditionally_select(
             cs.namespace(|| "freeze shake_block if at max"),
             cur_shake_block,
@@ -998,7 +942,6 @@ where
         let mut shifted_msg_blocks_be = vec![];
         for byte_idx in 0..(shifted_msg_blocks.len() / 8) {
             let byte_bits = &shifted_msg_blocks[byte_idx * 8..(byte_idx + 1) * 8];
-            // Reverse: LE to BE
             for bit in byte_bits.iter().rev() {
                 shifted_msg_blocks_be.push(bit.clone());
             }
