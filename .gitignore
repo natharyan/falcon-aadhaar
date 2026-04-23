@@ -9,3 +9,10 @@ Cargo.lock
 /*/.vscode
 .DS_Store
 **/.DS_Store
+/dependencies
+*.png
+*.jpeg
+*.jpg
+*.txt
+*.json
+keys/*
