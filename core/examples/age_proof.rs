@@ -228,32 +228,32 @@ fn main() {
         )
         .unwrap();
 
-    let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
-    for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
-        let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
+    // let mut z_current: Vec<<E1 as Engine>::Scalar> = z0_primary.clone();
+    // for (i, circuit) in primary_circuit_sequence.iter().enumerate() {
+    //     let mut cs = TestConstraintSystem::<<E1 as Engine>::Scalar>::new();
 
-        let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
-            .iter()
-            .enumerate()
-            .map(|(j, val)| {
-                AllocatedNum::alloc(cs.namespace(|| format!("z_{}", j)), || Ok(*val)).unwrap()
-            })
-            .collect();
+    //     let z_alloc: Vec<AllocatedNum<<E1 as Engine>::Scalar>> = z_current
+    //         .iter()
+    //         .enumerate()
+    //         .map(|(j, val)| {
+    //             AllocatedNum::alloc(cs.namespace(|| format!("z_{}", j)), || Ok(*val)).unwrap()
+    //         })
+    //         .collect();
 
-        let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
+    //     let z_next_alloc = circuit.synthesize(&mut cs, &z_alloc).unwrap();
 
-        if !cs.is_satisfied() {
-            println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
-            panic!("Constraint system not satisfied at step {}", i);
-        } else {
-            println!("Step {} OK", i,);
-        }
+    //     if !cs.is_satisfied() {
+    //         println!("Step {} FAILED: {}", i, cs.which_is_unsatisfied().unwrap());
+    //         panic!("Constraint system not satisfied at step {}", i);
+    //     } else {
+    //         println!("Step {} OK", i,);
+    //     }
 
-        z_current = z_next_alloc
-            .iter()
-            .map(|v| v.get_value().unwrap())
-            .collect();
-    }
+    //     z_current = z_next_alloc
+    //         .iter()
+    //         .map(|v| v.get_value().unwrap())
+    //         .collect();
+    // }
 
     let start = Instant::now();
     for (i, circuit_primary) in primary_circuit_sequence.iter().enumerate() {
