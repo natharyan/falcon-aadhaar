@@ -6,7 +6,7 @@ use crate::{
         SHAKE256_BLOCK_LENGTH_BITS, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS, SHAKE256_DIGEST_LENGTH_BYTES, keccak_f_1600, library_shake256_inject, library_step_sponge, shake256_gadget, shake256_inject, shake256_msg_blocks, shake256_pad101
     },
     ntt::{inv_ntt, inv_ntt_deferred_circuit, ntt, ntt_deferred_circuit, ntt_mult_const_p2},
-    qr::{AadhaarQRData, NONCE_LENGTH_BYTES, parse_aadhaar_qr_data},
+    qr::{AadhaarQRData, NONCE_LENGTH_BYTES},
     subarray::var_shift_left,
     utils::{
         bits_to_bytes_le, bytes_to_bits_le, enforce_less_than_norm_bound, mod_q, normalize_coeff,

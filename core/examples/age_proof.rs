@@ -5,9 +5,9 @@ use clap::Command;
 use falcon_aadhaar::{
     age_proof::AadhaarAgeProofCircuit,
     age_proof::OP_CODE_LAST,
-    qr::{parse_aadhaar_qr_data, AadhaarQRData},
+    qr::{parse_aadhaar_qr_data_falcon, AadhaarQRData},
 };
-use falcon_rust::{KeyPair, Polynomial, PublicKey};
+use falcon_rust::{Polynomial, PublicKey};
 use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
 use nova_snark::traits::circuit::StepCircuit;
@@ -117,7 +117,7 @@ fn main() {
     type C1 = AadhaarAgeProofCircuit<<E1 as Engine>::Scalar>;
     type C2 = TrivialCircuit<<E2 as Engine>::Scalar>;
 
-    let res = parse_aadhaar_qr_data(decompressed_qr_bytes.to_vec());
+    let res = parse_aadhaar_qr_data_falcon(decompressed_qr_bytes.to_vec());
     if !res.is_ok() {
         panic!("Error parsing Aadhaar QR code bytes")
     }
@@ -126,7 +126,7 @@ fn main() {
     let aadhaar_qr_data: AadhaarQRData = res.unwrap();
     println!(
         "Number of bytes in QR code: {}",
-        aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
+        aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.signature_bytes.len()
     );
 
     // println!("\n=== DoB Byte Index Debug ===");
@@ -158,7 +158,7 @@ fn main() {
     // }
     
     // println!("Number of bytes in QR code: {}",
-    //     aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.rsa_signature.len()
+    //     aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.signature_bytes.len()
     // );
 
 
