@@ -277,7 +277,7 @@ Performance report:
 | IVC | R1CS | PP Gen | Proof Gen | Proof Ver | CS Size | Fold Steps |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Age Proof | 244,344 | 3.063633333s | 16.047927792s | 380.183708ms | 11.2 KB | max(ceil((n - 666) / 136), 8) |
-| Aggregated Proof of Possession | 268,608 | 2.140314792s | 8.181745334s | 184.770375ms | 10.9 KB | 8 |
+| Aggregated Proof of Possession | 68,608 | 2.140314792s | 8.181745334s | 184.770375ms | 10.9 KB | 8 |
 | Naive Proof of Possession | 55,964 | 1.935920083s | 149.359159083s | 104.030833ms | 10.6 KB | 512 |
 
 Legend: R1CS = R1CS Constraints per Step, PP Gen = Public Parameter Generation Time, Proof Gen = Proof Generation Time, Proof Ver = Proof Verification Time, CS Size = Compressed SNARK JSON File Size, Fold Steps = Number of recursive folding steps.
