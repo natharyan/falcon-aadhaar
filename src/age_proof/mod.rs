@@ -985,9 +985,17 @@ where
             &age_gte_18,
         )?;
         
+        // 
+        // let flag_last_step = Boolean::and(
+        //     cs.namespace(|| "final step flag"),
+        //     &flag_absorb_last_step,
+        //     &flag_coeff.not(),
+        // )?;
+
+        // once all message blocks have been absorbed and all coefficients have been processed
         let flag_last_step = Boolean::and(
             cs.namespace(|| "final step flag"),
-            &flag_absorb_last_step,
+            &next_shake_opcode,
             &flag_coeff.not(),
         )?;
         
