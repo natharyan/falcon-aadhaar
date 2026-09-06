@@ -62,6 +62,31 @@ $ cargo run --release --example age_proof falcon_qr.png 23-04-2026
     Finished `release` profile [optimized] target(s) in 0.52s
      Running `<project_root>/target/release/examples/age_proof falcon_qr.png 23-04-2026`
 Number of bytes in QR code: 1789
+...
+Number of steps: 9
+RecursiveSNARK::prove_step 0: true, took 208ns
+...
+RecursiveSNARK::prove_step 8: true, took 583.465125ms
+Total time taken by RecursiveSNARK::prove_steps: 4.446823417s
+Verifying a RecursiveSNARK...
+RecursiveSNARK::verify: true, took 314.761208ms
+Generating a CompressedSNARK using Spartan with IPA-PC...
+...
+=========================================================
+Number of constraints per step: 244344
+Public parameters generation time: 3.119356959s 
+Total proving time (excl pp generation): 16.103760833s
+Compressed SNARK size: 11.2 KB
+Total verification time: 330.434917ms
+=========================================================
+Nullifier = 0x3c36427f6baf8d02571046e12f296400376b263d8d70d110292e394812fe21a4
+```
+
+```
+$ cargo run --release --example age_proof falcon_qr.png 23-04-2026
+    Finished `release` profile [optimized] target(s) in 0.52s
+     Running `<project_root>/target/release/examples/age_proof falcon_qr.png 23-04-2026`
+Number of bytes in QR code: 1789
 Producing public parameters...
 PublicParams::setup, took 3.119356959s 
 Number of constraints per step (primary circuit): 244344

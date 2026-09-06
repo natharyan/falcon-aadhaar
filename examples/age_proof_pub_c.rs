@@ -3,8 +3,8 @@ use bellpepper_core::test_cs::TestConstraintSystem;
 use bellpepper_core::ConstraintSystem;
 use clap::Command;
 use falcon_aadhaar::{
-    age_proof::AadhaarAgeProofCircuit,
-    age_proof::OP_CODE_LAST,
+    age_proof::pub_c::AadhaarAgeProofCircuit,
+    age_proof::pub_c::OP_CODE_LAST,
     qr::{parse_aadhaar_qr_data_falcon, AadhaarQRData},
 };
 use falcon_rust::{Polynomial, PublicKey};
@@ -164,8 +164,9 @@ fn main() {
     // falcon signature on aadhaar_qr_data.signed_data
     let h: PublicKey = aadhaar_qr_data.pk;
     let s2: Polynomial = (&aadhaar_qr_data.falcon_sig).into();
+    let c: Polynomial = aadhaar_qr_data.c;
 
-    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(h, s2);
+    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(h, s2, c);
     let circuit_secondary: C2 = TrivialCircuit::default();
 
     let param_gen_timer = Instant::now();
@@ -345,5 +346,5 @@ fn main() {
     let final_opcode = final_outputs[0];
     assert_eq!(final_opcode, <E1 as Engine>::Scalar::from(OP_CODE_LAST));
 
-    println!("Nullifier = {:?}", final_outputs[1]);
+    println!("Nullifier = {:?}", final_outputs[3]);
 }
