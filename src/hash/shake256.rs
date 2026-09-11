@@ -40,11 +40,11 @@ const ROTR: [usize; 25] = [
 ];
 
 /// library implementation of SHAKE256 using sha3 crate
-pub(crate) fn shake_256(input: &[u8], d: usize) -> Vec<u8> {
+pub fn shake_256(input: &[u8], d: usize) -> Vec<u8> {
     let mut hasher = Shake256::default();
     hasher.update(input);
     let mut reader = hasher.finalize_xof();
-    let mut result = vec![0u8; d];
+    let mut result: Vec<u8> = vec![0u8; d];
     XofReader::read(&mut reader, &mut result);
     result
 }
@@ -80,7 +80,7 @@ pub(crate) fn shake256_msg_block_sequence(
 }
 
 /// One step of the absorption (flag = false) or squeezing phase (flag = true)
-pub(crate) fn library_step_sponge(
+pub fn library_step_sponge(
     mut state: Vec<bool>,
     m_i: Option<Vec<bool>>,
     r: usize,
@@ -102,7 +102,7 @@ pub(crate) fn library_step_sponge(
     arr_u64_to_vec_bool(&input_arr_u64)
 }
 
-pub(crate) fn library_shake256_inject(mut state: [bool; 1600], msg: Vec<u8>) -> [bool; 1600] {
+pub fn library_shake256_inject(mut state: [bool; 1600], msg: Vec<u8>) -> [bool; 1600] {
     let msg_bits = bytes_to_bits_le(&msg);
     let m_blocks: Vec<[bool; SHAKE256_BLOCK_LENGTH_BITS]> = shake256_msg_block_sequence(msg_bits);
 
@@ -111,6 +111,24 @@ pub(crate) fn library_shake256_inject(mut state: [bool; 1600], msg: Vec<u8>) -> 
     }
 
     state
+}
+
+/// Squeeze `num_bytes` from a SHAKE256 state after absorption (matches sha3::Shake256 XOF output).
+pub fn library_shake256_extract(mut state: [bool; 1600], num_bytes: usize) -> Vec<u8> {
+    let r = SHAKE256_RATE_BITS;
+    let num_bits = num_bytes * 8;
+    let mut out_bits: Vec<bool> = Vec::with_capacity(num_bits);
+
+    out_bits.extend_from_slice(&state[..num_bits.min(r)]);
+
+    while out_bits.len() < num_bits {
+        state = library_step_sponge(state.to_vec(), None, r, true);
+        let need = num_bits - out_bits.len();
+        out_bits.extend_from_slice(&state[..need.min(r)]);
+    }
+
+    out_bits.truncate(num_bits);
+    bits_to_bytes_le(&out_bits)
 }
 
 // Bellpepper implementation of the above library functions

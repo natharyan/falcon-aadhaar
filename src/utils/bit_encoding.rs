@@ -6,6 +6,20 @@ pub(crate) fn bytes_to_bits_le(bytes: &[u8]) -> Vec<bool> {
         .collect()
 }
 
+// Read a 16-bit sample as two 8-bit little-endian values from the SHAKE256 XOR stream
+pub fn shake_sample_u16(state: &[bool], offset: usize) -> u16 {
+    let chunk = &state[offset..offset + 16];
+    let hi = chunk[0..8]
+        .iter()
+        .enumerate()
+        .fold(0u8, |acc, (i, &b)| acc | ((b as u8) << i));
+    let lo = chunk[8..16]
+        .iter()
+        .enumerate()
+        .fold(0u8, |acc, (i, &b)| acc | ((b as u8) << i));
+    ((hi as u16) << 8) | (lo as u16)
+}
+
 /// Convert little-endian bits to bytes
 pub(crate) fn bits_to_bytes_le(bits: &[bool]) -> Vec<u8> {
     bits.chunks(8)

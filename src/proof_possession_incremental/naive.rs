@@ -1,16 +1,16 @@
 use std::ops::Mul;
 use std::{alloc::alloc, ops::Add};
 
-use crate::age_proof::{
+use crate::age_proof::nova::{
     COEFF_INDEX_MASK, NUM_OPCODE_BITS, OP_COEFF_INDEX_FIRST, OP_COEFF_INDEX_LAST,
     OP_SHAKE256_ACTIVE, OP_SHAKE256_NO_OP,
 };
+use crate::hash::poseidon::PoseidonHasher;
 use crate::hash::shake256::{
     keccak_f_1600, library_shake256_inject, library_step_sponge, shake256_msg_blocks,
     shake256_pad101, SHAKE256_BLOCK_LENGTH_BYTES, SHAKE256_DIGEST_LENGTH_BITS,
     SHAKE256_DIGEST_LENGTH_BYTES, SHAKE256_RATE_BYTES,
 };
-use crate::hash::poseidon::PoseidonHasher;
 use crate::ntt::*;
 use crate::ntt::{inv_ntt_deferred_circuit, ntt, ntt_deferred_circuit, ntt_mult_const_p2};
 use crate::utils::{
@@ -20,15 +20,15 @@ use crate::utils::{
 };
 
 use crate::hash::shake256::shake_256;
+use crate::utils::{
+    alloc_constant, alloc_num_equals, alloc_num_equals_constant, boolean_implies,
+    conditionally_select, less_than, num_to_bits,
+};
 use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking};
 use bellpepper_core::{boolean::Boolean, num::AllocatedNum, ConstraintSystem, SynthesisError};
 use blstrs::Scalar;
 use falcon_rust::{Polynomial, PublicKey, Signature, LOG_N, MODULUS, N, SIG_L2_BOUND};
 use ff::{PrimeField, PrimeFieldBits};
-use crate::utils::{
-    alloc_constant, alloc_num_equals, alloc_num_equals_constant, boolean_implies,
-    conditionally_select, less_than, num_to_bits,
-};
 use nova_snark::traits::circuit::StepCircuit;
 use num_bigint::{BigInt, Sign};
 
@@ -104,7 +104,7 @@ where
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
         let hash_c = c_hasher.hash(&c_scalars);
 
-        vec![
+        std::vec![
             initial_l2_norm_sum,
             intial_coeff_index,
             hash_c,

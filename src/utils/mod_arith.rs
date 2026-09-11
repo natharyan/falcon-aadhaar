@@ -1,11 +1,11 @@
-use falcon_rust::MODULUS;
-use ff::{PrimeField, PrimeFieldBits};
-use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError};
+use crate::utils::{alloc_constant, conditionally_select, less_than_or_equal, num_to_bits};
+use crate::utils::{enforce_less_than_q, is_less_than_6144};
 use bellpepper_core::num::AllocatedNum;
-use crate::utils::{alloc_constant, conditionally_select};
+use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError};
+use falcon_rust::{MODULUS, MODULUS_MINUS_1_OVER_TWO};
+use ff::{PrimeField, PrimeFieldBits};
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
-use crate::utils::{enforce_less_than_q, is_less_than_6144};
 
 // referenced from https://github.com/zhenfeizhang/falcon.rs/blob/master/falcon-r1cs/src/gadgets/arithmetics.rs#L105
 /// Generate the variable b = a mod 12289;
@@ -235,7 +235,23 @@ where
         |lc| lc + modulus_var.get_variable(),
     );
 
-    let flag_less_than_half_q = is_less_than_6144(cs, a)?;
+    // let flag_less_than_half_q = is_less_than_6144(cs, a)?;
+
+    // a < 2^14 < 2q results at most two representives for a: a and a + q, normalize maps those to a and
+    // -a respectively, these give the same square a^2 which equals Falcon's l2_norm computation.
+    let _ = num_to_bits(
+        cs.namespace(|| "decompose normalize_half_q operand and constrain to 14 bits"),
+        a,
+        14,
+    )?;
+
+    let half_q = alloc_constant(
+        cs.namespace(|| "alloc_constant (q-1)/2"),
+        Scalar::from(MODULUS_MINUS_1_OVER_TWO as u64),
+    )?;
+    let flag_less_than_half_q =
+        less_than_or_equal(cs.namespace(|| "a <= (q-1)/2"), a, &half_q, 14)?;
+
     conditionally_select(
         cs.namespace(|| "normalize_half_q"),
         a,
@@ -254,4 +270,3 @@ pub(crate) fn normalize_coeff(val: i64) -> u64 {
     };
     normalized
 }
-

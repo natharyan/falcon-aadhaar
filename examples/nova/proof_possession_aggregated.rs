@@ -10,7 +10,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use image::{self};
 
 use falcon_aadhaar::{
-    age_proof::OP_CODE_LAST, proof_possession_incremental::AggregatedProofOfPossessionCircuit,
+    age_proof::nova::OP_CODE_LAST, proof_possession_incremental::AggregatedProofOfPossessionCircuit,
 };
 
 use bellpepper_core::num::AllocatedNum;
@@ -223,7 +223,10 @@ fn main() {
         "Total proving time (excl pp generation): {:?}",
         proving_time
     );
-    println!("Compressed SNARK size: {:.1} KB", compressed_snark_encoded.len() as f64 / 1000.0);
+    println!(
+        "Compressed SNARK size: {:.1} KB",
+        compressed_snark_encoded.len() as f64 / 1000.0
+    );
     println!("Total verification time: {:?}", verification_time);
 
     println!("=========================================================");

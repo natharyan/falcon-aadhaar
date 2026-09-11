@@ -1,16 +1,17 @@
-use core::alloc;
+use std::alloc::alloc;
 
+use crate::utils::{
+    alloc_constant, alloc_num_equals_constant, boolean_implies, conditionally_select, less_than,
+    normalize_half_q, num_to_bits, shake_sample_u16,
+};
 use crate::utils::{select_from_vec_linear, select_from_vector_512};
 use bellpepper::gadgets::Assignment;
 use bellpepper_core::{
     boolean::Boolean, num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError,
 };
 use blstrs::Scalar;
-use falcon_rust::{Polynomial, PublicKey, LOG_N, MODULUS, N};
+use falcon_rust::{Polynomial, PublicKey, LOG_N, MODULUS, MODULUS_THRESHOLD, N};
 use ff::PrimeFieldBits;
-use crate::utils::{
-    alloc_constant, alloc_num_equals_constant, boolean_implies, conditionally_select, less_than, num_to_bits
-};
 
 /// 5,131 constraints, independent of shift value
 /// Shift left by shift % n, 0 <= shift <= 2*n - 1
@@ -28,13 +29,11 @@ where
     assert_eq!(input.len(), n);
 
     // if shift > n then use shift as shift % n, but we can just enforce shift < n since we have n bits to represent shift
-    let var_n = alloc_constant(cs.namespace(|| "alloc_constant n for shift_minus_n"), Scalar::from(n as u64))?;
-    let shift_lt_n = less_than(
-        cs.namespace(|| "less_than shift n"),
-        shift,
-        &var_n,
-        nbits,
+    let var_n = alloc_constant(
+        cs.namespace(|| "alloc_constant n for shift_minus_n"),
+        Scalar::from(n as u64),
     )?;
+    let shift_lt_n = less_than(cs.namespace(|| "less_than shift n"), shift, &var_n, nbits)?;
     let shift_minus_n = AllocatedNum::alloc(cs.namespace(|| "alloc shift minus n"), || {
         let mut v = shift.get_value().ok_or(SynthesisError::AssignmentMissing)?;
         v.sub_assign(&Scalar::from(n as u64));
@@ -46,7 +45,7 @@ where
         |lc| lc + CS::one(),
         |lc| lc + shift_minus_n.get_variable(),
     );
-    
+
     // shift = shift % n
     let shift_res = conditionally_select(
         cs.namespace(|| "conditionally_select shift_res"),
@@ -56,7 +55,11 @@ where
     )?;
 
     let mut output: Vec<AllocatedNum<Scalar>> = input.clone();
-    let shift_bits = num_to_bits(cs.namespace(|| "num_to_bits var_shift_left"), &shift_res, nbits)?;
+    let shift_bits = num_to_bits(
+        cs.namespace(|| "num_to_bits var_shift_left"),
+        &shift_res,
+        nbits,
+    )?;
 
     for j in 0..nbits {
         let mut next = Vec::with_capacity(n);
@@ -165,58 +168,268 @@ where
     Ok(shift_left)
 }
 
+// Given input as shake256 output create an array of 1 and 0 where 1 is current 16 bits in big endian form < floor(2^{16}/12289)*12289 and 0 otherwise.
+pub fn create_bit_array(state: [bool; 1600]) -> [bool; 68] {
+    let mut bit_array = [false; 68];
+    for k in 0..68 {
+        bit_array[k] = shake_sample_u16(&state, 16 * k) < MODULUS_THRESHOLD; // floor(2^{16}/12289)*12289
+    }
+    bit_array
+}
+
 // 18,836 constraints for input.len() == 512
 /// prefix[i] = number of 1s before index i
 /// output[i] = input[prefix[i]]
-/// eg. bit_array = [1,0,1,0,1,1,1] then prefix = [0,1,1,2,2,3,4]
-pub fn pad_vec_from_bit_array<CS, Scalar>(
-    cs: &mut CS,
+/// eg. bit_array = [1,0,1,0,1,1,1] then prefix = [0,1,1,2,2,3,4] and output =
+///     [input[0], input[1], input[1], input[2], input[2], input[3], input[4]]
+///     (if input = [a,b,c,d,e,f,g] then output = [a,b,b,c,c,d,e])
+// pub fn pad_coeff<CS, Scalar>(
+//     cs: &mut CS,
+//     input: Vec<AllocatedNum<Scalar>>,
+//     bit_array: Vec<Boolean>,
+// ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
+// where
+//     Scalar: PrimeFieldBits,
+//     CS: ConstraintSystem<Scalar>,
+// {
+//     // assert_eq!(input.len(), 68);
+//     assert_eq!(bit_array.len(), 68);
+
+//     let mut prefix: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
+//     prefix.push(alloc_constant(cs.namespace(|| "prefix0"), Scalar::ZERO)?);
+//     for i in 1..68 {
+//         let next = AllocatedNum::alloc(cs.namespace(|| format!("prefix_{i}")), || {
+//             let prev = *prefix[i - 1].get_value().get()?;
+
+//             let bit = if bit_array[i - 1].get_value().unwrap_or(false) {
+//                 Scalar::ONE
+//             } else {
+//                 Scalar::ZERO
+//             };
+
+//             Ok(prev + bit)
+//         })?;
+
+//         cs.enforce(
+//             || format!("prefix update {i}"),
+//             |lc| lc + next.get_variable(),
+//             |lc| lc + CS::one(),
+//             |lc| lc + prefix[i - 1].get_variable() + &bit_array[i - 1].lc(CS::one(), Scalar::ONE),
+//         );
+
+//         prefix.push(next);
+//     }
+
+//     let mut output: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
+//     for i in 0..68 {
+//         let selected = select_from_vec_linear(
+//             cs.namespace(|| format!("select_from_vector_512_{i} pad_coeff")),
+//             &input,
+//             &prefix[i],
+//         )?;
+//         output.push(selected);
+//     }
+
+//     Ok(output)
+// }
+pub fn pad_coeff<CS, Scalar>(
+    mut cs: CS,
     input: Vec<AllocatedNum<Scalar>>,
-    bit_array: Vec<Boolean>,
+    bit_array: &[Boolean; 68],
 ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>
 where
     Scalar: PrimeFieldBits,
     CS: ConstraintSystem<Scalar>,
 {
-    assert_eq!(input.len(), 68);
     assert_eq!(bit_array.len(), 68);
+    assert!(input.len() <= 68);
+
+    // pad input up to length 68 with zero entries.
+    let mut padded_input = input.clone();
+    if padded_input.len() < 68 {
+        for i in padded_input.len()..68 {
+            padded_input.push(alloc_constant(
+                cs.namespace(|| format!("pad_coeff dummy input {i}")),
+                Scalar::ZERO,
+            )?);
+        }
+    }
 
     let mut prefix: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
     prefix.push(alloc_constant(cs.namespace(|| "prefix0"), Scalar::ZERO)?);
     for i in 1..68 {
         let next = AllocatedNum::alloc(cs.namespace(|| format!("prefix_{i}")), || {
             let prev = *prefix[i - 1].get_value().get()?;
-
             let bit = if bit_array[i - 1].get_value().unwrap_or(false) {
                 Scalar::ONE
             } else {
                 Scalar::ZERO
             };
-
             Ok(prev + bit)
         })?;
-
         cs.enforce(
             || format!("prefix update {i}"),
             |lc| lc + next.get_variable(),
             |lc| lc + CS::one(),
             |lc| lc + prefix[i - 1].get_variable() + &bit_array[i - 1].lc(CS::one(), Scalar::ONE),
         );
-
         prefix.push(next);
     }
 
     let mut output: Vec<AllocatedNum<Scalar>> = Vec::with_capacity(68);
     for i in 0..68 {
         let selected = select_from_vec_linear(
-            cs.namespace(|| format!("select_from_vector_512_{i} pad_vec_from_bit_array")),
-            &input,
+            cs.namespace(|| format!("select_from_vector_512_{i} pad_coeff")),
+            &padded_input,
             &prefix[i],
         )?;
         output.push(selected);
     }
-
     Ok(output)
+}
+
+/// prefix[i] = number of 1s before index i; output[i] = input[prefix[i]].
+pub fn pad_vec_from_bit_array(input: Vec<u16>, bit_array: [bool; 68]) -> [u16; 68] {
+    let wt = bit_array.iter().filter(|&&b| b).count();
+    assert!(
+        input.len() >= wt,
+        "input must hold one coefficient per accepted sample"
+    );
+
+    let mut output = [0u16; 68];
+    let mut prefix = 0usize;
+    for i in 0..68 {
+        if bit_array[i] {
+            output[i] = input[prefix];
+            prefix += 1;
+        }
+    }
+    output
+}
+
+// square of first wt(bit_array) coefficients
+pub fn l2normsquare_subarray<CS, Scalar>(
+    mut cs: CS,
+    input: &Vec<AllocatedNum<Scalar>>,
+    bit_array: &[Boolean; 68],
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
+where
+    Scalar: PrimeFieldBits + PartialOrd,
+    CS: ConstraintSystem<Scalar>,
+{
+    let mut acc: AllocatedNum<Scalar> = alloc_constant(
+        cs.namespace(|| "acc l2normsquare_subarray initialise"),
+        Scalar::from(0u64),
+    )?;
+
+    let var_0 = alloc_constant(
+        cs.namespace(|| "l2normsquare_subarray const_0"),
+        Scalar::from(0u64),
+    )?;
+    let var_1 = alloc_constant(
+        cs.namespace(|| "l2normsquare_subarray const_1"),
+        Scalar::from(1u64),
+    )?;
+
+    let mut weight_bit_array =
+        alloc_constant(cs.namespace(|| "weight_bit_array init"), Scalar::from(0u64))?;
+    for (i, b) in bit_array.iter().enumerate() {
+        let bit_val = conditionally_select(
+            cs.namespace(|| format!("weight_bit_array select_{i}")),
+            &var_1,
+            &var_0,
+            b,
+        )?;
+        weight_bit_array = weight_bit_array.add(
+            cs.namespace(|| format!("weight_bit_array add_{i}")),
+            &bit_val,
+        )?;
+    }
+
+    let sub = &input[..input.len().min(68)];
+
+    for i in 0..sub.len() {
+        let var_i = alloc_constant(
+            cs.namespace(|| format!("l2normsquare_subarray const_i_{i}")),
+            Scalar::from(i as u64),
+        )?;
+        let cur_coeff = &sub[i];
+        // let cur_coeff_squared =
+        //     cur_coeff.square(cs.namespace(|| format!("l2normsquare_subarray square_{i}")))?;
+        let cur_coeff_normalized = normalize_half_q(
+            &mut cs.namespace(|| format!("l2normsquare_select normalize_{i}")),
+            cur_coeff,
+        )?;
+        let cur_coeff_squared = cur_coeff_normalized.mul(
+            cs.namespace(|| format!("l2normsquare_select square_{i}")),
+            &cur_coeff_normalized,
+        )?;
+        let i_less_than_wt = less_than(
+            cs.namespace(|| format!("l2normsquare_subarray less_than_{i}")),
+            &var_i,
+            &weight_bit_array,
+            LOG_N,
+        )?;
+        let operand = conditionally_select(
+            cs.namespace(|| format!("l2normsquare_subarray select_{i}")),
+            &cur_coeff_squared,
+            &var_0,
+            &i_less_than_wt,
+        )?;
+        acc = acc.add(
+            cs.namespace(|| format!("l2normsquare_subarray add_{i}")),
+            &operand,
+        )?;
+    }
+
+    Ok(acc)
+}
+
+// l2 norm of a vector of coefficients which can have non-zero values used for padding at indices indicating rejection sampling using bit_array as a selector
+pub fn l2normsquare_select<CS, Scalar>(
+    mut cs: CS,
+    input: &Vec<AllocatedNum<Scalar>>,
+    bit_array: &[Boolean; 68],
+) -> Result<AllocatedNum<Scalar>, SynthesisError>
+where
+    Scalar: PrimeFieldBits + PartialOrd,
+    CS: ConstraintSystem<Scalar>,
+{
+    let mut acc = alloc_constant(
+        cs.namespace(|| "acc l2normsquare_select initialise"),
+        Scalar::from(0u64),
+    )?;
+
+    let var_0 = alloc_constant(
+        cs.namespace(|| "l2normsquare_select const_0"),
+        Scalar::from(0u64),
+    )?;
+
+    for i in 0..input.len() {
+        let cur_coeff = &input[i];
+        // let cur_coeff_squared =
+        //     cur_coeff.square(cs.namespace(|| format!("l2normsquare_select square_{i}")))?;
+        let cur_coeff_normalized = normalize_half_q(
+            &mut cs.namespace(|| format!("l2normsquare_select normalize_{i}")),
+            cur_coeff,
+        )?;
+        let cur_coeff_squared = cur_coeff_normalized.mul(
+            cs.namespace(|| format!("l2normsquare_select square_{i}")),
+            &cur_coeff_normalized,
+        )?;
+        let operand = conditionally_select(
+            cs.namespace(|| format!("l2normsquare_select select_{i}")),
+            &cur_coeff_squared,
+            &var_0,
+            &bit_array[i],
+        )?;
+        acc = acc.add(
+            cs.namespace(|| format!("l2normsquare_select add_{i}")),
+            &operand,
+        )?;
+    }
+
+    Ok(acc)
 }
 
 #[cfg(test)]
@@ -389,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pad_vec_from_bit_array() {
+    fn test_pad_coeff() {
         let mut cs = TestConstraintSystem::<Fr>::new();
         let mut rng = StdRng::seed_from_u64(999);
 
@@ -397,7 +610,7 @@ mod tests {
         let input_vals = get_vals(&input_vars);
 
         let mut bit_vals = Vec::with_capacity(68);
-        let mut bit_vars = Vec::with_capacity(68);
+        let mut bit_vars: Vec<Boolean> = Vec::with_capacity(68);
 
         for _ in 0..68 {
             let b: bool = rng.random::<bool>();
@@ -407,22 +620,21 @@ mod tests {
 
         let before = cs.num_constraints();
 
-        let output = pad_vec_from_bit_array(
-            &mut cs.namespace(|| "pad_vec"),
+        let bit_array: &[Boolean; 68] = bit_vars.as_slice().try_into().unwrap();
+
+        let output = pad_coeff(
+            &mut cs.namespace(|| "pad_coeff"),
             input_vars.clone(),
-            bit_vars.clone(),
+            bit_array,
         )
         .unwrap();
 
         let after = cs.num_constraints();
 
         let mut expected = vec![Fr::ZERO; 68];
-
         let mut prefix = 0usize;
-
         for i in 0..68 {
             expected[i] = input_vals[prefix];
-
             if bit_vals[i] {
                 prefix += 1;
             }
@@ -436,11 +648,121 @@ mod tests {
             );
         }
 
-        println!(
-            "number of constraints for pad_vec_bit_array: {}",
-            after - before
-        );
-
+        println!("number of constraints for pad_coeff: {}", after - before);
         assert!(cs.is_satisfied());
+    }
+
+    #[test]
+    fn test_pad_vec_from_bit_array() {
+        let mut rng = StdRng::seed_from_u64(999);
+        let bit_array: [bool; 68] = std::array::from_fn(|_| rng.random::<bool>());
+        let wt = bit_array.iter().filter(|&&b| b).count();
+        let input: Vec<u16> = (0..wt).map(|_| rng.random::<u16>()).collect();
+
+        let output = pad_vec_from_bit_array(input.clone(), bit_array);
+
+        let mut prefix = 0usize;
+        for i in 0..68 {
+            if bit_array[i] {
+                assert_eq!(output[i], input[prefix], "accepted slot {i}");
+                prefix += 1;
+            } else {
+                assert_eq!(output[i], 0, "rejected slot {i} must be zero-filled");
+            }
+        }
+        assert_eq!(prefix, wt);
+    }
+
+    #[test]
+    fn test_pad_vec_from_bit_array_all_ones() {
+        // all coefficients accepted: prefix advances every step → output[i] == input[i]
+        let input: Vec<u16> = (0..68).map(|i| i as u16).collect();
+        let output = pad_vec_from_bit_array(input.clone(), [true; 68]);
+        let expected: [u16; 68] = std::array::from_fn(|i| i as u16);
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_pad_vec_from_bit_array_all_zeros() {
+        // nothing accepted: the window is empty, nothing is read, every slot is zero
+        let output = pad_vec_from_bit_array(vec![], [false; 68]);
+        assert!(output.iter().all(|&v| v == 0));
+    }
+
+    // fn set_chunk(bits: &mut [bool; 1600], chunk: usize, value: u16) {
+    //     for j in 0..16 {
+    //         bits[chunk * 16 + (15 - j)] = (value >> j) & 1 == 1;
+    //     }
+    // }
+    fn set_chunk(bits: &mut [bool; 1600], chunk: usize, value: u16) {
+        let hi = (value >> 8) as u8;
+        let lo = (value & 0xff) as u8;
+        for j in 0..8 {
+            bits[chunk * 16 + j] = (hi >> j) & 1 == 1;
+            bits[chunk * 16 + 8 + j] = (lo >> j) & 1 == 1;
+        }
+    }
+
+    #[test]
+    fn test_bit_array_known_values() {
+        // SAMPLING_THREHOLD = floor(2^16 / 12289) * 12289 = 61445.
+        // The test is driven by hand-crafted chunk values whose accept/reject
+        // outcome is obvious without running bit_array at all.
+        let mut input = [false; 1600];
+
+        set_chunk(&mut input, 0, 0); // 0       < 61445 → true
+        set_chunk(&mut input, 1, 1); // 1       < 61445 → true
+        set_chunk(&mut input, 2, 61444); // 61444   < 61445 → true  (one below threshold)
+        set_chunk(&mut input, 3, 61445); // 61445  == 61445 → false (exactly at threshold)
+        set_chunk(&mut input, 4, 61446); // 61446   > 61445 → false
+        set_chunk(&mut input, 5, 65535); // 0xFFFF  > 61445 → false
+                                         // chunks 6..68 remain all-zero → all true
+
+        let output = create_bit_array(input);
+
+        assert_eq!(output[0], true, "0 should be accepted");
+        assert_eq!(output[1], true, "1 should be accepted");
+        assert_eq!(
+            output[2], true,
+            "61444 (one below threshold) should be accepted"
+        );
+        assert_eq!(
+            output[3], false,
+            "61445 (equal to threshold) should be rejected"
+        );
+        assert_eq!(output[4], false, "61446 should be rejected");
+        assert_eq!(output[5], false, "65535 should be rejected");
+        for i in 6..68 {
+            assert_eq!(output[i], true, "chunk {i} (value 0) should be accepted");
+        }
+    }
+}
+
+#[test]
+fn test_pad_vec_from_bit_array_last_bit_false() {
+    // the case that used to read input[wt] and panic: the final slot is rejected,
+    // so it is zero-filled and the window is never indexed past wt - 1
+    let mut bit_array = [true; 68];
+    bit_array[67] = false;
+    let input: Vec<u16> = (0..67).map(|i| i as u16).collect();
+    let output = pad_vec_from_bit_array(input, bit_array);
+    assert_eq!(output[67], 0);
+    for i in 0..67 {
+        assert_eq!(output[i], i as u16);
+    }
+}
+
+#[test]
+fn test_pad_vec_from_bit_array_last_bit_true() {
+    // final slot accepted: prefix reaches wt - 1 there, the last entry of the window
+    let mut bit_array = [false; 68];
+    bit_array[0] = true;
+    bit_array[67] = true;
+    let input: Vec<u16> = vec![11, 22]; // wt == 2
+    let output = pad_vec_from_bit_array(input, bit_array);
+    assert_eq!(output[0], 11);
+    assert_eq!(output[67], 22);
+    for i in 1..67 {
+        assert_eq!(output[i], 0);
     }
 }

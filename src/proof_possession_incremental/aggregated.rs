@@ -6,7 +6,7 @@ use std::{
 };
 
 // use crate::gadgets::{bellpepper_uint64::UInt64};
-use crate::age_proof::{
+use crate::age_proof::nova::{
     COEFF_INDEX_MASK, NUM_OPCODE_BITS, OP_COEFF_INDEX_FIRST, OP_COEFF_INDEX_LAST,
     OP_SHAKE256_ACTIVE, OP_SHAKE256_NO_OP,
 };
@@ -24,17 +24,17 @@ use crate::utils::{
     select_from_vec_linear,
 };
 
-use crate::hash::shake256::shake_256;
 use crate::hash::poseidon::PoseidonHasher;
+use crate::hash::shake256::shake_256;
+use crate::utils::{
+    alloc_constant, alloc_num_equals, alloc_num_equals_constant, boolean_implies,
+    conditionally_select, less_than, num_to_bits,
+};
 use bellpepper::gadgets::multipack::{bytes_to_bits, compute_multipacking, pack_bits};
 use bellpepper_core::{boolean::Boolean, num::AllocatedNum, ConstraintSystem, SynthesisError};
 use blstrs::Scalar;
 use falcon_rust::{Polynomial, PublicKey, Signature, LOG_N, MODULUS, N, SIG_L2_BOUND};
 use ff::{PrimeField, PrimeFieldBits};
-use crate::utils::{
-    alloc_constant, alloc_num_equals, alloc_num_equals_constant, boolean_implies,
-    conditionally_select, less_than, num_to_bits,
-};
 use nova_snark::traits::circuit::StepCircuit;
 use num_bigint::{BigInt, Sign};
 
@@ -110,7 +110,7 @@ where
         let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
         let hash_c = c_hasher.hash(&c_scalars);
 
-        vec![
+        std::vec![
             initial_l2_norm_sum,
             intial_coeff_index,
             hash_c,

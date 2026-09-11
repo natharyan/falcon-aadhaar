@@ -1,10 +1,10 @@
+use crate::utils::{alloc_num_equals, conditionally_select, num_to_bits};
+use bellpepper_core::num::AllocatedNum;
+use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError};
 use falcon_rust::MODULUS;
 use ff::{PrimeField, PrimeFieldBits};
-use bellpepper_core::{ConstraintSystem, LinearCombination, SynthesisError};
-use bellpepper_core::num::AllocatedNum;
-use crate::utils::{alloc_num_equals, conditionally_select, num_to_bits};
 
-use crate::age_proof::NUM_COEFF_INDEX_BITS;
+use crate::age_proof::nova::NUM_COEFF_INDEX_BITS;
 
 /// Indexed selection from an array via a binary mux tree using index bits
 /// idx = b0 + 2*b1 + 2^2*b2 + ... + 2^(n-1)*bn to select the correct element in O(n), here n = 512

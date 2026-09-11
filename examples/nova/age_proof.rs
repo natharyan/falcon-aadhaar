@@ -3,8 +3,8 @@ use bellpepper_core::test_cs::TestConstraintSystem;
 use bellpepper_core::ConstraintSystem;
 use clap::Command;
 use falcon_aadhaar::{
-    age_proof::AadhaarAgeProofCircuit,
-    age_proof::OP_CODE_LAST,
+    age_proof::nova::AadhaarAgeProofCircuit,
+    age_proof::nova::OP_CODE_LAST,
     qr::{parse_aadhaar_qr_data_falcon, AadhaarQRData},
 };
 use falcon_rust::{Polynomial, PublicKey};
@@ -67,7 +67,7 @@ fn main() {
     let fields: Vec<&[u8]> = decompressed_qr_bytes.split(|&b| b == 0xFF).collect();
 
     println!("=== Aadhaar QR Fields ===");
-    
+
     // println!("\n=== DoB Parsing Debug ===");
     // let test_dob_index = {
     //     let mut num_delimiters_seen = 0;
@@ -94,7 +94,7 @@ fn main() {
     //     println!("Buffer length: {}, dob_byte_index: {}", decompressed_qr_bytes.len(), test_dob_index);
     // }
     // println!();
-    
+
     for (i, field) in fields.iter().enumerate() {
         // Try to display as UTF-8 string, skip binary fields (photo/signature)
         if let Ok(text) = std::str::from_utf8(field) {
@@ -121,7 +121,7 @@ fn main() {
     if !res.is_ok() {
         panic!("Error parsing Aadhaar QR code bytes")
     }
-    
+
     // signed_data is the Falcon payload (AadhaarQR[0..n-256]); falcon_msg is nonce||signed_data.
     let aadhaar_qr_data: AadhaarQRData = res.unwrap();
     println!(
@@ -131,13 +131,13 @@ fn main() {
 
     // println!("\n=== DoB Byte Index Debug ===");
     // println!("Actual dob_byte_index from aadhaar_qr_data: {}", aadhaar_qr_data.dob_byte_index);
-    
+
     // if aadhaar_qr_data.dob_byte_index + 10 <= decompressed_qr_bytes.len() {
     //     let dob_bytes = &decompressed_qr_bytes[aadhaar_qr_data.dob_byte_index..aadhaar_qr_data.dob_byte_index + 10];
     //     println!("DoB bytes (hex): {:02X?}", dob_bytes);
     //     println!("DoB as string: '{}'", String::from_utf8_lossy(dob_bytes));
     //     println!("First byte: {} (should be 48-57 for digit)", dob_bytes[0]);
-        
+
     //     // Also check what's in the first 136-byte block that gets passed to circuit
     //     println!("\nFirst 136 bytes of signed_data:");
     //     let msg_block = &aadhaar_qr_data.signed_data[0..std::cmp::min(136, aadhaar_qr_data.signed_data.len())];
@@ -145,9 +145,9 @@ fn main() {
     //     for i in 30..std::cmp::min(50, msg_block.len()) {
     //         println!("  Index {}: 0x{:02X} = {}", i, msg_block[i], msg_block[i] as char);
     //     }
-        
-    //     println!("\nBytes at DoB position (indices {}-{}) in first block:", 
-    //              aadhaar_qr_data.dob_byte_index, 
+
+    //     println!("\nBytes at DoB position (indices {}-{}) in first block:",
+    //              aadhaar_qr_data.dob_byte_index,
     //              aadhaar_qr_data.dob_byte_index + 9);
     //     for i in aadhaar_qr_data.dob_byte_index..std::cmp::min(aadhaar_qr_data.dob_byte_index + 10, msg_block.len()) {
     //         println!("  Index {}: 0x{:02X} = {}", i, msg_block[i], msg_block[i] as char);
@@ -156,18 +156,16 @@ fn main() {
     //     println!("ERROR: dob_byte_index + 10 exceeds buffer!");
     //     println!("Buffer length: {}, dob_byte_index: {}", decompressed_qr_bytes.len(), aadhaar_qr_data.dob_byte_index);
     // }
-    
+
     // println!("Number of bytes in QR code: {}",
     //     aadhaar_qr_data.signed_data.len() + aadhaar_qr_data.signature_bytes.len()
     // );
 
-
     // falcon signature on aadhaar_qr_data.signed_data
     let h: PublicKey = aadhaar_qr_data.pk;
     let s2: Polynomial = (&aadhaar_qr_data.falcon_sig).into();
-    let c: Polynomial = aadhaar_qr_data.c;
 
-    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(h, s2, c);
+    let circuit_primary: C1 = AadhaarAgeProofCircuit::default(h, s2);
     let circuit_secondary: C2 = TrivialCircuit::default();
 
     let param_gen_timer = Instant::now();
@@ -201,7 +199,6 @@ fn main() {
         pp.num_variables().1
     );
 
-    
     let primary_circuit_sequence = C1::new_state_sequence(
         &aadhaar_qr_data,
         &aadhaar_qr_data.falcon_sig,
@@ -335,8 +332,11 @@ fn main() {
         "Total proving time (excl pp generation): {:?}",
         proving_time
     );
-    println!("Compressed SNARK size: {:.1} KB", compressed_snark_encoded.len() as f64 / 1000.0);
-    println!("Total verification time: {:?}", verification_time);   
+    println!(
+        "Compressed SNARK size: {:.1} KB",
+        compressed_snark_encoded.len() as f64 / 1000.0
+    );
+    println!("Total verification time: {:?}", verification_time);
 
     println!("=========================================================");
 
@@ -345,5 +345,5 @@ fn main() {
     let final_opcode = final_outputs[0];
     assert_eq!(final_opcode, <E1 as Engine>::Scalar::from(OP_CODE_LAST));
 
-    println!("Nullifier = {:?}", final_outputs[3]);
+    println!("Nullifier = {:?}", final_outputs[1]);
 }

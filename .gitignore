@@ -7,8 +7,10 @@ Cargo.lock
 /Falcon-impl-round3/test_falcon
 /.vscode
 /*/.vscode
+.notes
 .DS_Store
 **/.DS_Store
+/references
 /dependencies
 *.png
 *.jpeg
