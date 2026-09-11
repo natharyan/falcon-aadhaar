@@ -6,7 +6,7 @@ use bellpepper_core::test_cs::TestConstraintSystem;
 use bellpepper_core::ConstraintSystem;
 use clap::Command;
 use falcon_aadhaar::{
-    age_proof::OP_CODE_LAST, proof_possession_incremental::NaiveProofOfPossessionCircuit,
+    age_proof::nova::OP_CODE_LAST, proof_possession_incremental::NaiveProofOfPossessionCircuit,
     qr::parse_aadhaar_qr_data,
 };
 use falcon_rust::{KeyPair, Polynomial, PublicKey};
@@ -200,7 +200,10 @@ fn main() {
         "Total proving time (excl pp generation): {:?}",
         proving_time
     );
-    println!("Compressed SNARK size: {:.1} KB", compressed_snark_encoded.len() as f64 / 1000.0);
+    println!(
+        "Compressed SNARK size: {:.1} KB",
+        compressed_snark_encoded.len() as f64 / 1000.0
+    );
     println!("Total verification time: {:?}", verification_time);
 
     println!("=========================================================");

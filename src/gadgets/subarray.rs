@@ -290,12 +290,17 @@ where
 
 /// prefix[i] = number of 1s before index i; output[i] = input[prefix[i]].
 pub fn pad_vec_from_bit_array(input: Vec<u16>, bit_array: [bool; 68]) -> [u16; 68] {
-    assert_eq!(input.len(), 68, "input must have length 68");
+    let wt = bit_array.iter().filter(|&&b| b).count();
+    assert!(
+        input.len() >= wt,
+        "input must hold one coefficient per accepted sample"
+    );
+
     let mut output = [0u16; 68];
     let mut prefix = 0usize;
     for i in 0..68 {
-        output[i] = input[prefix];
         if bit_array[i] {
+            output[i] = input[prefix];
             prefix += 1;
         }
     }
@@ -650,26 +655,27 @@ mod tests {
     #[test]
     fn test_pad_vec_from_bit_array() {
         let mut rng = StdRng::seed_from_u64(999);
-        let input: Vec<u16> = (0..68).map(|_| rng.random::<u16>()).collect();
         let bit_array: [bool; 68] = std::array::from_fn(|_| rng.random::<bool>());
+        let wt = bit_array.iter().filter(|&&b| b).count();
+        let input: Vec<u16> = (0..wt).map(|_| rng.random::<u16>()).collect();
 
         let output = pad_vec_from_bit_array(input.clone(), bit_array);
 
-        let mut expected = [0u16; 68];
         let mut prefix = 0usize;
         for i in 0..68 {
-            expected[i] = input[prefix];
             if bit_array[i] {
+                assert_eq!(output[i], input[prefix], "accepted slot {i}");
                 prefix += 1;
+            } else {
+                assert_eq!(output[i], 0, "rejected slot {i} must be zero-filled");
             }
         }
-
-        assert_eq!(output, expected);
+        assert_eq!(prefix, wt);
     }
 
     #[test]
     fn test_pad_vec_from_bit_array_all_ones() {
-        // all bits set: prefix advances every step → output[i] == input[i]
+        // all coefficients accepted: prefix advances every step → output[i] == input[i]
         let input: Vec<u16> = (0..68).map(|i| i as u16).collect();
         let output = pad_vec_from_bit_array(input.clone(), [true; 68]);
         let expected: [u16; 68] = std::array::from_fn(|i| i as u16);
@@ -678,10 +684,9 @@ mod tests {
 
     #[test]
     fn test_pad_vec_from_bit_array_all_zeros() {
-        // no bits set: prefix never advances → every slot is input[0]
-        let input: Vec<u16> = (0..68).map(|i| i as u16 + 100).collect();
-        let output = pad_vec_from_bit_array(input.clone(), [false; 68]);
-        assert!(output.iter().all(|&v| v == input[0]));
+        // nothing accepted: the window is empty, nothing is read, every slot is zero
+        let output = pad_vec_from_bit_array(vec![], [false; 68]);
+        assert!(output.iter().all(|&v| v == 0));
     }
 
     // fn set_chunk(bits: &mut [bool; 1600], chunk: usize, value: u16) {
@@ -734,15 +739,30 @@ mod tests {
 }
 
 #[test]
-fn test_pad_vec_from_bit_array_last_bit_false_reads_final_slot() {
-    // with bit_array[67] false, prefix reaches wt == 67 at i == 67, so the final slot
-    // reads input[67] that goes out of bounds on a wt-length input
+fn test_pad_vec_from_bit_array_last_bit_false() {
+    // the case that used to read input[wt] and panic: the final slot is rejected,
+    // so it is zero-filled and the window is never indexed past wt - 1
     let mut bit_array = [true; 68];
     bit_array[67] = false;
-    let input: Vec<u16> = (0..68).map(|i| i as u16).collect();
+    let input: Vec<u16> = (0..67).map(|i| i as u16).collect();
     let output = pad_vec_from_bit_array(input, bit_array);
-    assert_eq!(output[67], 67);
+    assert_eq!(output[67], 0);
     for i in 0..67 {
         assert_eq!(output[i], i as u16);
+    }
+}
+
+#[test]
+fn test_pad_vec_from_bit_array_last_bit_true() {
+    // final slot accepted: prefix reaches wt - 1 there, the last entry of the window
+    let mut bit_array = [false; 68];
+    bit_array[0] = true;
+    bit_array[67] = true;
+    let input: Vec<u16> = vec![11, 22]; // wt == 2
+    let output = pad_vec_from_bit_array(input, bit_array);
+    assert_eq!(output[0], 11);
+    assert_eq!(output[67], 22);
+    for i in 1..67 {
+        assert_eq!(output[i], 0);
     }
 }

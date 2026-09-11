@@ -3,8 +3,8 @@ use bellpepper_core::test_cs::TestConstraintSystem;
 use bellpepper_core::ConstraintSystem;
 use clap::Command;
 use falcon_aadhaar::{
-    age_proof::AadhaarAgeProofCircuit,
-    age_proof::OP_CODE_LAST,
+    age_proof::nova::AadhaarAgeProofCircuit,
+    age_proof::nova::OP_CODE_LAST,
     qr::{parse_aadhaar_qr_data_falcon, AadhaarQRData},
 };
 use falcon_rust::{Polynomial, PublicKey};

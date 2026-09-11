@@ -6,7 +6,7 @@ use std::{
 };
 
 // use crate::gadgets::{bellpepper_uint64::UInt64};
-use crate::age_proof::{
+use crate::age_proof::nova::{
     COEFF_INDEX_MASK, NUM_OPCODE_BITS, OP_COEFF_INDEX_FIRST, OP_COEFF_INDEX_LAST,
     OP_SHAKE256_ACTIVE, OP_SHAKE256_NO_OP,
 };
