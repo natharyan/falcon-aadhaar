@@ -23,7 +23,7 @@ use super::stark_field::StarkFq;
 fn compute_path(ns: &[String], this: &str) -> String {
     assert!(
         !this.chars().any(|a| a == '/'),
-        "'/' is not allowed in names"
+        "'/' is not allowed in names, found in {this:?}"
     );
 
     if ns.is_empty() {
@@ -53,6 +53,7 @@ impl Default for ShapeCS {
     }
 }
 
+// reference: https://docs.rs/bellpepper-core/latest/src/bellpepper_core/util_cs/test_cs.rs.html#175-334
 impl ShapeCS {
     pub fn new() -> Self {
         Self {

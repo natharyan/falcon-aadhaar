@@ -1,46 +1,29 @@
-//! `StarkFq`: an `ff::PrimeField` twin of `stark_rings`' `Fq`.
+//! StarkFq: an ff::PrimeField implemenation of stark_rings Fq which is based on ark_ff.
 //!
-//! `bellpepper_core::ConstraintSystem<Scalar>` requires `Scalar: ff::PrimeField`
-//! (the zkcrypto `ff` crate). `stark_rings`' base field is
+//! bellpepper_core::ConstraintSystem<Scalar> requires Scalar: ff::PrimeField
+//! (the zkcrypto ff crate). latticefold uses stark_rings which has base field
+//!    pub type Fq = Fp256<MontBackend<FqConfig, 4>>;   // ark_ff::PrimeField.
 //!
-//!     pub type Fq = Fp256<MontBackend<FqConfig, 4>>;   // ark_ff
+//! Fq cannot be used as Scalar directly because it does not implement ff::PrimeField, StarkFq is ff:Primefield with same modulus
+//! as Fq, which enables conversion between the two types.
 //!
-//! i.e. `ark_ff::PrimeField`. These are two unrelated traits from two unrelated
-//! ecosystems, and stark-rings depends on `ark-ff` only -- no `ff` impl exists
-//! anywhere in it. We also cannot add one: orphan rule, both the trait and the
-//! type are foreign. So `Fq` can never be a bellpepper `Scalar`, and the circuit
-//! cannot be synthesized over it directly.
+//! reference: stark-rings/crates/ring/src/cyclotomic_ring/models/stark_prime/mod.rs:
+//! #[modulus = "3618502788666131213697322783095070105623107215331596699973092056135872020481"]
+//! #[generator = "3"]
 //!
-//! `StarkFq` is the bridge: an `ff`-derived field at the identical modulus, so
-//! converting between the two is a byte-level repr reformat rather than a
-//! reduction into a different field.
-//!
-//! Modulus and generator copied verbatim from
-//! stark-rings/crates/ring/src/cyclotomic_ring/models/stark_prime/mod.rs:
-//!
-//!     #[modulus = "3618502788666131213697322783095070105623107215331596699973092056135872020481"]
-//!     #[generator = "3"]
-//!
-//! (Starknet prime, 2^251 + 17*2^192 + 1. `test_moduli_agree` below checks the
-//! two definitions coincide at runtime)
 
 use ark_ff::PrimeField as ArkPrimeField;
 use ff::PrimeField;
 use stark_rings::cyclotomic_ring::models::stark_prime::Fq as ArkFq;
 
+// define StarkFq to implement ff::Primefield with same modulus as stark_rings::Fq (ark_ff::PrimeField)
 #[derive(PrimeField)]
 #[PrimeFieldModulus = "3618502788666131213697322783095070105623107215331596699973092056135872020481"]
 #[PrimeFieldGenerator = "3"]
 #[PrimeFieldReprEndianness = "little"]
 pub struct StarkFq([u64; 4]);
 
-/// `StarkFq` (bellpepper side) -> `Fq` (stark-rings side).
-///
-/// `to_repr()` gives little-endian bytes (per `PrimeFieldReprEndianness` above),
-/// and `from_le_bytes_mod_order` reads little-endian. The `mod_order` in the name
-/// is a no-op here: the input is already reduced and both types share a modulus.
-/// If it ever does reduce, the moduli have drifted and `test_moduli_agree`
-/// should be failing.
+/// StarkFq (bellpepper) -> Fq (stark-rings)
 pub fn to_ark_fq(v: &StarkFq) -> ArkFq {
     ArkFq::from_le_bytes_mod_order(v.to_repr().as_ref())
 }
@@ -48,7 +31,7 @@ pub fn to_ark_fq(v: &StarkFq) -> ArkFq {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ff::Field;
+    use ff::{Field, PrimeFieldBits};
 
     #[test]
     fn test_moduli_agree() {
@@ -69,6 +52,64 @@ mod tests {
                 to_ark_fq(&StarkFq::from(v)),
                 ArkFq::from(v),
                 "mismatch at {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_satisfies_step_circuit_bounds() {
+        fn assert_step_circuit_scalar<Scalar: PrimeFieldBits + PartialOrd>() {}
+        assert_step_circuit_scalar::<StarkFq>();
+
+        fn assert_ord<T: Ord>() {}
+        assert_ord::<StarkFq>();
+    }
+
+    #[test]
+    fn test_ord_is_canonical() {
+        // Basic monotonicity.
+        assert!(StarkFq::ZERO < StarkFq::ONE);
+        assert!(StarkFq::from(1u64) < StarkFq::from(2u64));
+
+        // Straddles a byte boundary, catches a reversed comparison order.
+        assert!(StarkFq::from(255u64) < StarkFq::from(256u64));
+        // ...and a 64-bit limb boundary.
+        assert!(StarkFq::from(u64::MAX) < StarkFq::from(u64::MAX) + StarkFq::ONE);
+
+        // Falcon's modulus.
+        assert!(StarkFq::from(12288u64) < StarkFq::from(12289u64));
+
+        // The exact comparison enforce_less_than_norm_bound performs.
+        const SIG_L2_BOUND: u64 = 34034726;
+        assert!(StarkFq::from(SIG_L2_BOUND - 1) < StarkFq::from(SIG_L2_BOUND));
+        assert!(StarkFq::from(SIG_L2_BOUND) >= StarkFq::from(SIG_L2_BOUND));
+        assert!(StarkFq::from(SIG_L2_BOUND + 1) > StarkFq::from(SIG_L2_BOUND));
+
+        let max = StarkFq::ZERO - StarkFq::ONE;
+        assert!(StarkFq::from(u64::MAX) < max);
+        assert!(StarkFq::ZERO < max);
+        assert_eq!(max.cmp(&max), core::cmp::Ordering::Equal);
+
+        let a = StarkFq::from(7u64);
+        let b = StarkFq::from(9u64);
+        assert_eq!(a.partial_cmp(&b), Some(a.cmp(&b)));
+        assert_eq!(a.cmp(&b), core::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_ord_agrees_across_the_bridge() {
+        let pairs = [
+            (0u64, 1u64),
+            (255, 256),
+            (12288, 12289),
+            (34034725, 34034726),
+        ];
+        for (lo, hi) in pairs {
+            let (lo_ff, hi_ff) = (StarkFq::from(lo), StarkFq::from(hi));
+            assert!(lo_ff < hi_ff, "StarkFq ordering wrong at ({lo}, {hi})");
+            assert!(
+                to_ark_fq(&lo_ff) < to_ark_fq(&hi_ff),
+                "ordering not preserved across to_ark_fq at ({lo}, {hi})"
             );
         }
     }

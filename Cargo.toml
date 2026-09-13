@@ -9,7 +9,7 @@ nova-aadhaar-qr = { git = "https://github.com/avras/nova-aadhaar-qr" }
 bellpepper = { version = "0.4.0", default-features = false }
 bellpepper-core = { version = "0.4.0", default-features = false }
 bellpepper-nonnative = { git = "https://github.com/avras/bellperson-nonnative.git" }
-ff = { version = "0.13.0", features = ["derive"] }
+ff = { version = "0.13.0", features = ["derive", "derive_bits"] }
 nova-snark = { git = "https://github.com/microsoft/Nova.git", default-features = false, rev = "ac8b057cd6fbc2aba7b2888a9b9c37fec9119d45" }
 cyclotomic-rings = { git = "https://github.com/nethermindeth/latticefold"}
 stark-rings = { git = "https://github.com/NethermindEth/stark-rings.git", branch = "main", default-features = false }

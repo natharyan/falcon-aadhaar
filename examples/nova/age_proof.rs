@@ -68,33 +68,6 @@ fn main() {
 
     println!("=== Aadhaar QR Fields ===");
 
-    // println!("\n=== DoB Parsing Debug ===");
-    // let test_dob_index = {
-    //     let mut num_delimiters_seen = 0;
-    //     let mut i = 2;
-    //     while i < decompressed_qr_bytes.len() && num_delimiters_seen < 4 {
-    //         if decompressed_qr_bytes[i] == 0xFF {
-    //             num_delimiters_seen += 1;
-    //         }
-    //         i += 1;
-    //     }
-    //     i
-    // };
-    // println!("Calculated dob_byte_index: {}", test_dob_index);
-    // if test_dob_index + 10 <= decompressed_qr_bytes.len() {
-    //     let dob_bytes = &decompressed_qr_bytes[test_dob_index..test_dob_index + 10];
-    //     println!("DoB bytes (hex): {:02X?}", dob_bytes);
-    //     if let Ok(dob_str) = std::str::from_utf8(dob_bytes) {
-    //         println!("DoB as string: '{}'", dob_str);
-    //     }
-    //     println!("First byte: {} (should be 48-57 for '0'-'9')", dob_bytes[0]);
-    //     println!("All bytes as chars: {}", dob_bytes.iter().map(|&b| format!("{}", b as char)).collect::<String>());
-    // } else {
-    //     println!("ERROR: dob_byte_index + 10 exceeds buffer length!");
-    //     println!("Buffer length: {}, dob_byte_index: {}", decompressed_qr_bytes.len(), test_dob_index);
-    // }
-    // println!();
-
     for (i, field) in fields.iter().enumerate() {
         // Try to display as UTF-8 string, skip binary fields (photo/signature)
         if let Ok(text) = std::str::from_utf8(field) {
