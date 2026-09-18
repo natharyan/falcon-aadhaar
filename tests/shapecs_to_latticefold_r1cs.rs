@@ -18,6 +18,8 @@ use zlib_rs::{
     ReturnCode,
 };
 
+use latticefold::nifs::NIFSProver;
+
 fn qr_image_path() -> String {
     std::env::var("FALCON_QR_IMAGE")
         .unwrap_or_else(|_| format!("{}/falcon_qr.png", env!("CARGO_MANIFEST_DIR")))

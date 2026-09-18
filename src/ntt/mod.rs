@@ -1,3 +1,4 @@
+use crate::utils::alloc_constant;
 use crate::utils::{enforce_less_than_q, mod_q};
 use bellpepper::gadgets::{boolean::Boolean, num::Num};
 use bellpepper_core::{num::AllocatedNum, ConstraintSystem, LinearCombination, SynthesisError};
@@ -6,7 +7,6 @@ use falcon_rust::{NTTPolynomial, Polynomial, LOG_N, MODULUS, N, ONE_OVER_N};
 use ff::Field;
 use ff::{PrimeField, PrimeFieldBits};
 use generic_array::typenum::{Log2, U63};
-use crate::utils::alloc_constant;
 use nova_snark::traits::commitment::ScalarMul;
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
@@ -250,7 +250,7 @@ pub(crate) fn inv_ntt(input: &NTTPolynomial) -> Polynomial {
 /// Calculate ntt(input) but defer range check to the main circuit.
 /// creates 0 constraints
 pub(crate) fn ntt_deferred_circuit<Scalar, CS>(
-    cs: CS,
+    mut cs: CS,
     input: &[AllocatedNum<Scalar>],
 ) -> Result<Vec<Num<Scalar>>, SynthesisError>
 where
@@ -269,6 +269,8 @@ where
         .map(|(i, c)| Num::zero().add_bool_with_coeff(CS::one(), &Boolean::constant(true), *c))
         .collect();
 
+    const LAYERS_PER_GROUP: usize = 3;
+
     if input.len() != N {
         panic!("input length {} is not N", input.len())
     }
@@ -282,12 +284,6 @@ where
         let mut i = 0;
         let mut j1 = 0;
 
-        // coefficients of input are constrained in the main circuit, so all these operations are native field operations
-        // let const_mod_pow_lplus2 = Num::zero().add_bool_with_coeff(
-        //     CS::one(),
-        //     &Boolean::constant(true),
-        //     const_q_powers[l + 1],
-        // );
         while i < m {
             let s = Scalar::from(NTT_TABLE[m + i] as u64);
             let j2 = j1 + ht;
@@ -296,7 +292,10 @@ where
                 let u = output[j].clone();
                 let v = output[j + ht].clone().scale(s);
                 // let neg_v = &const_q_powers[l + 1] - &v;
-                let const_mod_pow_lplus2 = const_nums[l + 1].clone();
+                // let const_mod_pow_lplus2 = const_nums[l + 1].clone();
+                // the growth resets at every reduction, so the constant must reset too:
+                // index by position WITHIN the group, not by absolute layer.
+                let const_mod_pow_lplus2 = const_nums[(l % LAYERS_PER_GROUP) + 1].clone();
                 let neg_v = const_mod_pow_lplus2
                     .clone()
                     .add(&v.clone().scale(-Scalar::ONE));
@@ -307,6 +306,27 @@ where
             }
             i += 1;
             j1 += t;
+        }
+
+        // NOTE: no `&& l + 1 < LOG_N` guard. the final group must be reduced too,
+        // because ntt_mult_const_p2 scales this output by a p2 coefficient < q, and
+        // 15q^4 * q = 15q^5 = 2^71.8 would overflow a 64-bit prime.
+        //
+        // the namespace must be unique per layer: num_reduce_mod_q creates
+        // "reduced_{i}" inside, so reusing one outer name across layers 2/5/8 gives
+        // duplicate paths and TestConstraintSystem panics on those.
+        //
+        // if (l + 1) % LAYERS_PER_GROUP == 0 && l + 1 < LOG_N {
+        //     let reduced = num_reduce_mod_q(
+        //         cs.namespace(|| "reduced = num_reduce_mod_q output"),
+        //         &output,
+        //     );
+        if (l + 1) % LAYERS_PER_GROUP == 0 {
+            let reduced = num_reduce_mod_q(
+                cs.namespace(|| format!("ntt reduce after layer {}", l)),
+                &output,
+            );
+            output = reduced.into_iter().map(Num::from).collect();
         }
         t = ht;
     }
@@ -348,7 +368,8 @@ where
 /// output the inverse NTT of the input
 /// creates 0 constraints
 pub(crate) fn inv_ntt_deferred_circuit<Scalar, CS>(
-    cs: CS,
+    // cs: CS,
+    mut cs: CS, // needs to be mut for cs.namespace(..) on the interior reductions
     input: Vec<Num<Scalar>>,
 ) -> Result<Vec<Num<Scalar>>, SynthesisError>
 where
@@ -366,6 +387,8 @@ where
         .enumerate()
         .map(|(i, c)| Num::zero().add_bool_with_coeff(CS::one(), &Boolean::constant(true), *c))
         .collect();
+
+    const LAYERS_PER_GROUP_INV: usize = 2;
 
     let mut output = input;
     let mut t = 1;
@@ -387,7 +410,9 @@ where
             while j < j2 {
                 let u = output[j].clone();
                 let v = output[j + t].clone();
-                let neg_v = const_nums[stage + 1]
+                // let neg_v = const_nums[stage + 1]
+                // same reset as the forward NTT: index within the group, not absolute.
+                let neg_v = const_nums[(stage % LAYERS_PER_GROUP_INV) + 1]
                     .clone()
                     .add(&v.clone().scale(-Scalar::ONE));
 
@@ -402,6 +427,17 @@ where
             j1 += dt;
         }
 
+        // stage 8 is deliberately left unreduced: it is alone in the final group, and
+        // < 3q^3 followed by scale(ONE_OVER_N) lands at < 3q^4 = 2^55.9, which the
+        // caller reduces.
+        if (stage + 1) % LAYERS_PER_GROUP_INV == 0 && stage + 1 < LOG_N {
+            let reduced = num_reduce_mod_q(
+                cs.namespace(|| format!("inv ntt reduce after stage {}", stage)),
+                &output,
+            );
+            output = reduced.into_iter().map(Num::from).collect();
+        }
+
         t = dt;
         m = hm;
     }
@@ -413,6 +449,7 @@ where
     Ok(output)
 }
 
+/// reduce an array of Num<Scalar> mod q and return AllocatedNum<Scalar> for each reduced value
 pub(crate) fn num_reduce_mod_q<CS, Scalar>(
     mut cs: CS,
     nums: &[Num<Scalar>],
@@ -533,7 +570,7 @@ mod tests {
             .unwrap();
 
         let a_ntt_num =
-            ntt_deferred_circuit(cs.namespace(|| "ntt_deferred_circuit_test"), &a_alloc).unwrap();
+            ntt_deferred_circuit(cs.namespace(|| "ntt_deferred_circuit a"), &a_alloc).unwrap();
 
         let reduced = num_reduce_mod_q(cs.namespace(|| "reduced ntt_circuit"), &a_ntt_num);
 

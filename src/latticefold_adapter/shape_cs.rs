@@ -225,7 +225,44 @@ pub fn permute_index(idx: Index, x_len: usize) -> usize {
     }
 }
 
-/// compute the permuted matrices A, B, C from a bellpepper `ShapeCS`
+// ADD to src/latticefold_adapter/shape_cs.rs, directly BELOW permute_index.
+//
+// the two belong together: permute_index moves matrix COLUMNS from bellpepper's
+// order to latticefold's, z_vector moves the WITNESS the same way. if they ever
+// disagree, column k stops being variable k and every check still passes on the
+// witness that was built to match. keeping them adjacent makes the pairing visible,
+// and gives ntt_pack.rs and tests/shapecs_to_latticefold_r1cs.rs one definition
+// instead of two copies.
+//
+// reference: latticefold arith/r1cs.rs get_test_z ("z = (io, 1, w)"); folded-falcon
+// crates/folded-falcon/src/r1cs.rs (nvars = input_len + 1 + witness_len)
+
+/// assemble z in latticefold's order from a witness-bearing constraint system's
+/// assignments. bellpepper stores input_assignment = [1, x_1, ..., x_l] and
+/// aux_assignment = [w_0, ...]; latticefold wants z = (x || 1 || w).
+///
+/// takes the two assignment slices rather than a &TestConstraintSystem so that
+/// shape_cs stays backend-agnostic: a leaner WitnessCS (Nova's
+/// frontend/util_cs/witness_cs.rs) exposes the same two vectors and would work
+/// unchanged.
+///
+/// call as: z_vector(&cs.scalar_inputs(), &cs.scalar_aux())
+pub fn z_vector(inputs: &[StarkFq], aux: &[StarkFq]) -> Vec<StarkFq> {
+    debug_assert_eq!(
+        inputs[0],
+        StarkFq::from(1u64),
+        "input 0 must be the implicit constant 1"
+    );
+
+    inputs[1..]
+        .iter()
+        .chain(core::iter::once(&inputs[0])) // constant moves to index l
+        .chain(aux.iter())
+        .copied()
+        .collect()
+}
+
+/// compute the permuted matrices A, B, C from a bellpepper ShapeCS to match z = (x || 1 || w) instead of z = (1 || x || w) as compiled by Bellpepper.
 pub fn get_matrices(cs: &ShapeCS) -> (BpMatrix, BpMatrix, BpMatrix) {
     let x_len = cs.num_inputs() - 1;
 
@@ -329,6 +366,7 @@ impl LatticefoldR1CS {
     }
 }
 
+// convert constraints in ShapeCS to latticefold::arith::r1cs::R1CS with z ordered as (x || 1 || w).
 pub fn build_r1cs(cs: &ShapeCS) -> LatticefoldR1CS {
     let x_len = cs.num_inputs() - 1;
     let ncols = x_len + 1 + cs.num_aux();

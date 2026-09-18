@@ -1,5 +1,3 @@
-// referenced from lurk-lab/gadget/keccak (https://github.com/lurk-lab/bellpepper-gadgets/blob/main/crates/keccak/src/lib.rs)
-// modified to include shake256, variable input length, and squeezing phase of the sponge construction of keccak for variable output length.
 // Bellpepper implementation of https://github.com/natharyan/arkworks-keccak/blob/main/src/constraints.rs for shake256
 
 use crate::gadgets::bellpepper_uint64::UInt64;
@@ -86,7 +84,10 @@ pub fn library_step_sponge(
     r: usize,
     flag: bool,
 ) -> [bool; 1600] {
-    assert!(state.len() == 1600, "library_step_sponge: State must be of length 1600 bits");
+    assert!(
+        state.len() == 1600,
+        "library_step_sponge: State must be of length 1600 bits"
+    );
     // absorption step
     if !flag {
         if let Some(m_i_bits) = m_i {
