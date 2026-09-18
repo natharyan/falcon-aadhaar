@@ -1,4 +1,4 @@
-//! Extract matrices A,B,C and vector z from Bellpepper circuit; Convert Bellpepper LinearCombination over StarkFq (derives ff:Primefield) to Latticefold R1CS over StarkRingNTT
+//! Extract matrices A,B,C and vector z from Bellpepper circuit; Convert Bellpepper LinearCombination over GoldilocksFq (derives ff:Primefield) to Latticefold R1CS over GoldilocksRingNTT
 
 use bellpepper_core::{
     Comparable,
@@ -10,12 +10,17 @@ use bellpepper_core::{
     SynthesisError,
     Variable,
 };
-use cyclotomic_rings::rings::StarkRingNTT;
+use cyclotomic_rings::rings::{GoldilocksRingNTT, StarkRingNTT};
+// use cyclotomic_rings::rings::GoldilocksRingNTT;
 use latticefold::arith::{error::CSError, r1cs::R1CS};
 use stark_rings_linalg::SparseMatrix;
 
-use super::stark_field;
-use super::stark_field::StarkFq;
+use crate::latticefold_adapter::goldilocks_field::embed_slot;
+
+use super::goldilocks_field;
+use super::goldilocks_field::GoldilocksFq;
+// use super::stark_field;
+// use super::stark_field::StarkFq;
 
 // record constraints
 
@@ -37,7 +42,7 @@ pub struct ShapeCS {
     num_inputs: usize,
     num_aux: usize,
 
-    constraints: Vec<Constraint<StarkFq>>,
+    constraints: Vec<Constraint<GoldilocksFq>>,
 
     // namespace stack. mirrors `TestConstraintSystem::current_namespace`.
     current_namespace: Vec<String>,
@@ -79,7 +84,7 @@ impl ShapeCS {
         self.num_aux
     }
 
-    pub fn constraints(&self) -> &[Constraint<StarkFq>] {
+    pub fn constraints(&self) -> &[Constraint<GoldilocksFq>] {
         &self.constraints
     }
 
@@ -99,13 +104,9 @@ impl ShapeCS {
         }
     }
 
-    /// renders one constraint as path: (A) * (B) = (C) with variables named.
-    /// following `TestShapeCS::pretty_print`, which prints each row as
-    /// `{name}: (..) * (..) = (..)`; that version falls back to `I{i}` / `A{i}`
-    /// for variables, we substitute the recorded paths.
     pub fn pretty_print_constraint(&self, row: usize) -> Option<String> {
         let (a, b, c, path) = self.constraints.get(row)?;
-        let render = |lc: &BpLC<StarkFq>| -> String {
+        let render = |lc: &BpLC<GoldilocksFq>| -> String {
             let terms: Vec<String> = lc
                 .iter()
                 .map(|(v, _)| {
@@ -129,8 +130,8 @@ impl ShapeCS {
     }
 }
 
-/// Lets `ShapeCS` be diffed against any other bellpepper constraint system via `Comparable::delta`.
-impl Comparable<StarkFq> for ShapeCS {
+/// lets `ShapeCS` be diffed against any other bellpepper constraint system via Comparable::delta.
+impl Comparable<GoldilocksFq> for ShapeCS {
     fn num_inputs(&self) -> usize {
         self.num_inputs
     }
@@ -147,18 +148,18 @@ impl Comparable<StarkFq> for ShapeCS {
         self.aux_names.clone()
     }
 
-    fn constraints(&self) -> &[Constraint<StarkFq>] {
+    fn constraints(&self) -> &[Constraint<GoldilocksFq>] {
         &self.constraints
     }
 }
 
-impl ConstraintSystem<StarkFq> for ShapeCS {
+impl ConstraintSystem<GoldilocksFq> for ShapeCS {
     type Root = Self;
 
     // Witness variable.
     fn alloc<F, A, AR>(&mut self, annotation: A, _f: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<StarkFq, SynthesisError>,
+        F: FnOnce() -> Result<GoldilocksFq, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -171,7 +172,7 @@ impl ConstraintSystem<StarkFq> for ShapeCS {
     // Public input.
     fn alloc_input<F, A, AR>(&mut self, annotation: A, _f: F) -> Result<Variable, SynthesisError>
     where
-        F: FnOnce() -> Result<StarkFq, SynthesisError>,
+        F: FnOnce() -> Result<GoldilocksFq, SynthesisError>,
         A: FnOnce() -> AR,
         AR: Into<String>,
     {
@@ -185,9 +186,9 @@ impl ConstraintSystem<StarkFq> for ShapeCS {
     where
         A: FnOnce() -> AR,
         AR: Into<String>,
-        LA: FnOnce(BpLC<StarkFq>) -> BpLC<StarkFq>,
-        LB: FnOnce(BpLC<StarkFq>) -> BpLC<StarkFq>,
-        LC: FnOnce(BpLC<StarkFq>) -> BpLC<StarkFq>,
+        LA: FnOnce(BpLC<GoldilocksFq>) -> BpLC<GoldilocksFq>,
+        LB: FnOnce(BpLC<GoldilocksFq>) -> BpLC<GoldilocksFq>,
+        LC: FnOnce(BpLC<GoldilocksFq>) -> BpLC<GoldilocksFq>,
     {
         let path = compute_path(&self.current_namespace, &annotation().into());
         self.constraints
@@ -211,12 +212,12 @@ impl ConstraintSystem<StarkFq> for ShapeCS {
     }
 }
 
-/// matrices derived from Bellpepper's linear combinations for R1CS over StarkFq.
+/// matrices derived from Bellpepper's linear combinations for R1CS over GoldilocksFq.
 /// matrix rows are represented by (coefficient, column) following stark_rings_linalg::SparseMatrix.
-pub type BpMatrix = Vec<Vec<(StarkFq, usize)>>;
+pub type BpMatrix = Vec<Vec<(GoldilocksFq, usize)>>;
 
-/// permute bellpepper matrices A,B,C and vector z indices to follow latticefold's `z` vector order.
 /// bellpepper follows z = (1,x,w), latticefold follows z = (x,1,w).
+/// permute bellpepper matrices A,B,C and vector z indices to follow latticefold's z vector order.
 pub fn permute_index(idx: Index, x_len: usize) -> usize {
     match idx {
         Index::Input(0) => x_len,
@@ -225,13 +226,26 @@ pub fn permute_index(idx: Index, x_len: usize) -> usize {
     }
 }
 
-/// compute the permuted matrices A, B, C from a bellpepper `ShapeCS`
+pub fn z_vector(inputs: &[GoldilocksFq], aux: &[GoldilocksFq]) -> Vec<GoldilocksFq> {
+    debug_assert_eq!(
+        inputs[0],
+        GoldilocksFq::from(1u64),
+        "input 0 must be the implicit constant 1"
+    );
+
+    inputs[1..]
+        .iter()
+        .chain(core::iter::once(&inputs[0])) // constant moves to index l
+        .chain(aux.iter())
+        .copied()
+        .collect()
+}
+
+/// compute the permuted matrices A, B, C from a bellpepper ShapeCS to match z = (x || 1 || w) instead of z = (1 || x || w) as compiled by Bellpepper.
 pub fn get_matrices(cs: &ShapeCS) -> (BpMatrix, BpMatrix, BpMatrix) {
     let x_len = cs.num_inputs() - 1;
 
-    let row_of = |lc: &BpLC<StarkFq>| -> Vec<(StarkFq, usize)> {
-        // `iter()` yields (Variable, &Scalar). Bellpepper already merges repeated
-        // terms on the same variable, so no dedup pass is needed here.
+    let row_of = |lc: &BpLC<GoldilocksFq>| -> Vec<(GoldilocksFq, usize)> {
         lc.iter()
             .map(|(v, coeff)| (*coeff, permute_index(v.get_unchecked(), x_len)))
             .collect()
@@ -250,8 +264,8 @@ pub fn get_matrices(cs: &ShapeCS) -> (BpMatrix, BpMatrix, BpMatrix) {
     (a, b, c)
 }
 
-// test gadget which uses the same starkfield element (coeff) across all NTT slots and does NTT^{-1} on [v;D] where D=16 to produce a ring element in StarkRingNTT.
-pub fn to_sparse_matrix(rows: &BpMatrix, ncols: usize) -> SparseMatrix<StarkRingNTT> {
+// test gadget which uses the same starkfield element (coeff) across all NTT slots and does NTT^{-1} on [v;D] where D=16 to produce a ring element in GoldilocksRingNTT.
+pub fn to_sparse_matrix(rows: &BpMatrix, ncols: usize) -> SparseMatrix<GoldilocksRingNTT> {
     SparseMatrix {
         nrows: rows.len(),
         ncols,
@@ -259,9 +273,11 @@ pub fn to_sparse_matrix(rows: &BpMatrix, ncols: usize) -> SparseMatrix<StarkRing
             .iter()
             .map(|row| {
                 row.iter()
-                    // to_ark_fq: our StarkFq (ff::PrimeField, used in Bellpepper) -> stark_rings' Fq (ark_ff::PrimeField, what the ring needs).
+                    // to_ark_fq: our GoldilocksFq (ff::PrimeField, used in Bellpepper) -> stark_rings' Fq (ark_ff::PrimeField, what the ring needs).
                     // both using same modulus.
-                    .map(|(coeff, col)| (StarkRingNTT::from(stark_field::to_ark_fq(coeff)), *col))
+                    .map(|(coeff, col)|
+                        // (StarkRingNTT::from(stark_field::to_ark_fq(coeff)), *col))
+                        (GoldilocksRingNTT::from(goldilocks_field::embed_slot(coeff)), *col))
                     .collect()
             })
             .collect(),
@@ -271,7 +287,7 @@ pub fn to_sparse_matrix(rows: &BpMatrix, ncols: usize) -> SparseMatrix<StarkRing
 // derive latticefold::arith::r1cs::R1CS from our ShapeCS.
 pub struct LatticefoldR1CS {
     /// used by CCS::from_r1cs_padded.
-    pub r1cs: R1CS<StarkRingNTT>,
+    pub r1cs: R1CS<GoldilocksRingNTT>,
     /// row index -> path.
     constraint_names: Vec<String>,
     /// pretty-printed rows of the R1CS, including their namespaces.
@@ -280,7 +296,7 @@ pub struct LatticefoldR1CS {
 
 impl LatticefoldR1CS {
     /// the path of the first unsatisfied constraint, or `None` if all are satisfied.
-    pub fn which_is_unsatisfied(&self, z: &[StarkRingNTT]) -> Option<&str> {
+    pub fn which_is_unsatisfied(&self, z: &[GoldilocksRingNTT]) -> Option<&str> {
         match self.r1cs.check_relation(z) {
             Ok(()) => None,
             Err(CSError::NotSatisfied(row)) => Some(
@@ -296,7 +312,7 @@ impl LatticefoldR1CS {
     }
 
     /// true if satisfied; prints the unsatisfied constraint if not.
-    pub fn is_satisfied(&self, z: &[StarkRingNTT]) -> bool {
+    pub fn is_satisfied(&self, z: &[GoldilocksRingNTT]) -> bool {
         match self.check_relation(z) {
             Ok(()) => true,
             Err(msg) => {
@@ -308,7 +324,7 @@ impl LatticefoldR1CS {
     }
 
     /// report failing constraint/implementation error along with an error description.
-    pub fn check_relation(&self, z: &[StarkRingNTT]) -> Result<(), String> {
+    pub fn check_relation(&self, z: &[GoldilocksRingNTT]) -> Result<(), String> {
         match self.r1cs.check_relation(z) {
             Ok(()) => Ok(()),
             Err(CSError::NotSatisfied(row)) => Err(match self.rendered.get(row) {
@@ -329,6 +345,7 @@ impl LatticefoldR1CS {
     }
 }
 
+// convert constraints in ShapeCS to latticefold::arith::r1cs::R1CS with z ordered as (x || 1 || w).
 pub fn build_r1cs(cs: &ShapeCS) -> LatticefoldR1CS {
     let x_len = cs.num_inputs() - 1;
     let ncols = x_len + 1 + cs.num_aux();
@@ -362,21 +379,25 @@ mod tests {
     struct CubicCircuit;
 
     impl CubicCircuit {
-        fn synthesize<CS: ConstraintSystem<StarkFq>>(
+        fn synthesize<CS: ConstraintSystem<GoldilocksFq>>(
             &self,
             cs: &mut CS,
-            z: &[AllocatedNum<StarkFq>],
-        ) -> Result<Vec<AllocatedNum<StarkFq>>, SynthesisError> {
+            z: &[AllocatedNum<GoldilocksFq>],
+        ) -> Result<Vec<AllocatedNum<GoldilocksFq>>, SynthesisError> {
             let x = &z[0];
             let x_sq = x.square(cs.namespace(|| "x_sq"))?;
             let x_cu = x_sq.mul(cs.namespace(|| "x_cu"), x)?;
             let y = AllocatedNum::alloc(cs.namespace(|| "y"), || {
                 let xv = x.get_value().ok_or(SynthesisError::AssignmentMissing)?;
-                Ok(xv * xv * xv + xv + StarkFq::from(5u64))
+                Ok(xv * xv * xv + xv + GoldilocksFq::from(5u64))
             })?;
             cs.enforce(
                 || "y = x^3 + x + 5",
-                |lc| lc + x_cu.get_variable() + x.get_variable() + (StarkFq::from(5u64), CS::one()),
+                |lc| {
+                    lc + x_cu.get_variable()
+                        + x.get_variable()
+                        + (GoldilocksFq::from(5u64), CS::one())
+                },
                 |lc| lc + CS::one(),
                 |lc| lc + y.get_variable(),
             );
@@ -386,33 +407,35 @@ mod tests {
 
     fn synthesize_test_circuit() -> ShapeCS {
         let mut cs = ShapeCS::new();
-        let x =
-            AllocatedNum::alloc(cs.namespace(|| "x"), || Ok(StarkFq::from(5u64))).expect("alloc x");
+        let x = AllocatedNum::alloc(cs.namespace(|| "x"), || Ok(GoldilocksFq::from(5u64)))
+            .expect("alloc x");
         x.inputize(cs.namespace(|| "x is constrained to a public variable"))
             .expect("inputize x");
         CubicCircuit.synthesize(&mut cs, &[x]).expect("synthesize");
         cs
     }
 
-    fn good_z() -> Vec<StarkRingNTT> {
+    fn good_z() -> Vec<GoldilocksRingNTT> {
         // z = (x || 1 || w), witness in allocation order: x, x^2, x^3, y.
         [5u64, 1, 5, 25, 125, 135]
             .into_iter()
-            .map(StarkRingNTT::from)
+            .map(GoldilocksRingNTT::from)
             .collect()
     }
 
-    /// synthesize the same circuit into `ShapeCS` and into
-    /// bellpepper's own `TestConstraintSystem`, then diff them with `delta`.
+    /// synthesize the same circuit into ShapeCS and into
+    /// bellpepper's own TestConstraintSystem, then diff them with delta.
     /// Delta::Equal means the two agree on input count, constraint count,
     /// input names, and every constraint (LinearCombination's). Anything else prints which row diverged.
     #[test]
     fn test_matches_test_constraint_system() {
         let our_shapecs = synthesize_test_circuit();
 
-        let mut bellpepper_cs = TestConstraintSystem::<StarkFq>::new();
-        let x = AllocatedNum::alloc(bellpepper_cs.namespace(|| "x"), || Ok(StarkFq::from(5u64)))
-            .expect("alloc x");
+        let mut bellpepper_cs = TestConstraintSystem::<GoldilocksFq>::new();
+        let x = AllocatedNum::alloc(bellpepper_cs.namespace(|| "x"), || {
+            Ok(GoldilocksFq::from(5u64))
+        })
+        .expect("alloc x");
         // following the test case in Nova for ShapeCS
         x.inputize(bellpepper_cs.namespace(|| "x is constrained to a public variable"))
             .expect("inputize x");
@@ -542,9 +565,9 @@ mod tests {
         let extracted = build_r1cs(&cs);
 
         // y off by one: 136 instead of 135.
-        let bad: Vec<StarkRingNTT> = [5u64, 1, 5, 25, 125, 136]
+        let bad: Vec<GoldilocksRingNTT> = [5u64, 1, 5, 25, 125, 136]
             .into_iter()
-            .map(StarkRingNTT::from)
+            .map(GoldilocksRingNTT::from)
             .collect();
 
         let err = extracted.check_relation(&bad).expect_err(

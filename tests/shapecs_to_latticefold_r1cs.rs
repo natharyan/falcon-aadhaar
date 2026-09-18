@@ -1,12 +1,13 @@
 use bellpepper_core::num::AllocatedNum;
 use bellpepper_core::test_cs::TestConstraintSystem;
 use bellpepper_core::{Comparable, ConstraintSystem, Delta};
-use cyclotomic_rings::rings::StarkRingNTT;
+use cyclotomic_rings::rings::GoldilocksRingNTT;
 use falcon_aadhaar::{
     age_proof::latticefold::AadhaarAgeProofCircuit,
     age_proof::latticefold::StepCircuit,
+    // latticefold_adapter::stark_field::{to_ark_fq, GoldilocksFq},
+    latticefold_adapter::goldilocks_field::{embed_slot, GoldilocksFq},
     latticefold_adapter::shape_cs::{build_r1cs, ShapeCS},
-    latticefold_adapter::stark_field::{to_ark_fq, StarkFq},
     qr::{parse_aadhaar_qr_data_falcon, AadhaarQRData},
 };
 use falcon_rust::{Polynomial, PublicKey};
@@ -17,6 +18,8 @@ use zlib_rs::{
     inflate::{uncompress_slice, InflateConfig},
     ReturnCode,
 };
+
+use latticefold::nifs::NIFSProver;
 
 fn qr_image_path() -> String {
     std::env::var("FALCON_QR_IMAGE")
@@ -64,8 +67,8 @@ fn latticefold_r1cs_matches_step_circuit_witness() {
         }
     }
 
-    // The step function circuit, instantiated over StarkFq
-    type C1 = AadhaarAgeProofCircuit<StarkFq>;
+    // The step function circuit, instantiated over GoldilocksFq
+    type C1 = AadhaarAgeProofCircuit<GoldilocksFq>;
 
     let res = parse_aadhaar_qr_data_falcon(decompressed_qr_bytes.to_vec());
     if !res.is_ok() {
@@ -101,7 +104,7 @@ fn latticefold_r1cs_matches_step_circuit_witness() {
 
     let shape_timer = Instant::now();
     let mut shape_cs = ShapeCS::new();
-    let z0_shape: Vec<AllocatedNum<StarkFq>> = z0
+    let z0_shape: Vec<AllocatedNum<GoldilocksFq>> = z0
         .iter()
         .enumerate()
         .map(|(i, v)| {
@@ -129,8 +132,8 @@ fn latticefold_r1cs_matches_step_circuit_witness() {
     println!("ShapeCS synthesis took {:?}", shape_time);
 
     let wit_timer = Instant::now();
-    let mut test_cs = TestConstraintSystem::<StarkFq>::new();
-    let z0_wit: Vec<AllocatedNum<StarkFq>> = z0
+    let mut test_cs = TestConstraintSystem::<GoldilocksFq>::new();
+    let z0_wit: Vec<AllocatedNum<GoldilocksFq>> = z0
         .iter()
         .enumerate()
         .map(|(i, v)| {
@@ -194,11 +197,11 @@ fn latticefold_r1cs_matches_step_circuit_witness() {
     );
     assert_eq!(
         inputs[0],
-        StarkFq::from(1u64),
+        GoldilocksFq::from(1u64),
         "input 0 must be the constant 1"
     );
 
-    let z_field: Vec<StarkFq> = inputs[1..]
+    let z_field: Vec<GoldilocksFq> = inputs[1..]
         .iter()
         .chain(core::iter::once(&inputs[0])) // the constant, now at index l
         .chain(aux.iter())
@@ -206,9 +209,9 @@ fn latticefold_r1cs_matches_step_circuit_witness() {
         .collect();
     assert_eq!(z_field.len(), extracted.r1cs.A.ncols);
 
-    let z: Vec<StarkRingNTT> = z_field
+    let z: Vec<GoldilocksRingNTT> = z_field
         .iter()
-        .map(|v| StarkRingNTT::from(to_ark_fq(v)))
+        .map(|v| GoldilocksRingNTT::from(embed_slot(v)))
         .collect();
 
     let check_timer = Instant::now();
@@ -219,7 +222,7 @@ fn latticefold_r1cs_matches_step_circuit_witness() {
 
     let mut z_bad = z.clone();
     let last = z_bad.len() - 1;
-    z_bad[last] = z_bad[last] + StarkRingNTT::from(1u64);
+    z_bad[last] = z_bad[last] + GoldilocksRingNTT::from(1u64);
     assert!(
         extracted.check_relation(&z_bad).is_err(),
         "a pertubed witness vector was accepted: the extracted R1CS constraints incorrect"

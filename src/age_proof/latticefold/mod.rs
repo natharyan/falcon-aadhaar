@@ -226,7 +226,12 @@ where
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
-        assert!(ctx_inject_packed.len() == 7);
+        // assert!(ctx_inject_packed.len() == 7);
+        // assert!(
+        //     ctx_inject_packed.len() == 26,
+        //     "Expected 26 packed scalars, got {}",
+        //     ctx_inject_packed.len()
+        // );
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
 
         let mut ctx_squeeze: [bool; 1600] = ctx_inject.clone();

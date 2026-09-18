@@ -1,13 +1,12 @@
 //! StarkFq: an ff::PrimeField implemenation of stark_rings Fq which is based on ark_ff.
 //!
-//! bellpepper_core::ConstraintSystem<Scalar> requires Scalar: ff::PrimeField
-//! (the zkcrypto ff crate). latticefold uses stark_rings which has base field
+//! bellpepper_core::ConstraintSystem<Scalar> requires Scalar: ff::PrimeField.
+//! latticefold uses stark_rings which has base field
 //!    pub type Fq = Fp256<MontBackend<FqConfig, 4>>;   // ark_ff::PrimeField.
 //!
 //! Fq cannot be used as Scalar directly because it does not implement ff::PrimeField, StarkFq is ff:Primefield with same modulus
 //! as Fq, which enables conversion between the two types.
 //!
-//! reference: stark-rings/crates/ring/src/cyclotomic_ring/models/stark_prime/mod.rs:
 //! #[modulus = "3618502788666131213697322783095070105623107215331596699973092056135872020481"]
 //! #[generator = "3"]
 //!
