@@ -1,7 +1,8 @@
 //! GoldilocksFq: an ff::PrimeField implementation of stark_rings' of Goldilocks base-field -> Fq3 subfield embedding required for the inverse
 //! formally: NTT(poly \in GoldilocksRingNTT) \in  GoldilocksFq[X]/(X^3 - X - 1).
-//! latticefold's Goldilocks ring has base prime field in ark_ff
-//! (refer to: stark-rings crates/ring/src/cyclotomic_ring/models/goldilocks/mod.rs).
+
+//! bellpepper_core::ConstraintSystem<Scalar> requires Scalar: ff::PrimeField.
+//! latticefold uses stark_rings which has base field in ark_ff::PrimeField.
 //!
 //! # NTT components = 8, each is a degree-3 extension of the base field
 
@@ -42,7 +43,7 @@ mod tests {
     #[test]
     fn test_moduli_agree() {
         let neg_one_ff = GoldilocksFq::ZERO - GoldilocksFq::ONE;
-        let neg_one_ark = -ArkFqG::from(1u64);
+        let neg_one_ark = -ArkFqG::from_le_bytes_mod_order(&[1u8]);
         assert_eq!(
             to_ark_fq(&neg_one_ff),
             neg_one_ark,
@@ -56,7 +57,7 @@ mod tests {
         for v in [0u64, 1, 2, 5, 12289, 61445, 999_999, u32::MAX as u64] {
             assert_eq!(
                 to_ark_fq(&GoldilocksFq::from(v)),
-                ArkFqG::from(v),
+                ArkFqG::from_le_bytes_mod_order(&v.to_le_bytes()),
                 "mismatch at {v}"
             );
         }
@@ -90,7 +91,10 @@ mod tests {
         // u^2 coordinates must be zero, or the "wastes 2/3 of the slot" reasoning --
         // and the icrt-is-a-constant-polynomial claim for matrices -- would be false.
         let e = embed_slot(&GoldilocksFq::from(42u64));
-        assert_eq!(e, Fq3::from_base_prime_field(ArkFqG::from(42u64)));
+        assert_eq!(
+            e,
+            Fq3::from_base_prime_field(ArkFqG::from_le_bytes_mod_order(&42u64.to_le_bytes()))
+        );
     }
 
     #[test]

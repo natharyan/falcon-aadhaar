@@ -55,3 +55,7 @@ path = "examples/nova/age_proof.rs"
 [[example]]
 name = "latticefold_age_proof"
 path = "examples/latticefold/age_proof.rs"
+
+[[example]]
+name = "latticefold_age_proof_stark"
+path = "examples/latticefold/age_proof_starkfield.rs"
