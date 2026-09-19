@@ -1,3 +1,7 @@
+pub mod circuit_starkfq;
+
+// step function circuit over Goldilocks prime field
+
 use crate::subarray::{
     create_bit_array, l2normsquare_select, l2normsquare_subarray, pad_coeff, pad_vec_from_bit_array,
 };
@@ -12,7 +16,10 @@ use crate::{
         calculate_age_in_years, delimiter_count_before_and_within_dob_is_correct,
         get_day_month_year_conditional, left_shift_bytes, DOB_INDEX_BIT_LENGTH,
     },
-    hash::poseidon::PoseidonHasher,
+    // hash::poseidon::PoseidonHasher,
+    // poseidon_gl: plonky2 Poseidon-over-Goldilocks. PoseidonHasher is a single-element
+    // drop-in (element [0] of the 4-elt digest); IvcHash bounds Scalar to GoldilocksFq.
+    hash::poseidon_gl::{IvcHash, PoseidonHasher},
     hash::shake256::{
         keccak_f_1600, library_shake256_inject, library_step_sponge, shake256_gadget,
         shake256_inject, shake256_msg_blocks, shake256_pad101, SHAKE256_BLOCK_LENGTH_BITS,
@@ -81,7 +88,10 @@ where
     bit_array: [bool; 68],
     // c: Polynomial,
     h: PublicKey,
-    ctx_inject_packed: [Scalar; 7],
+    // ctx_inject_packed: [Scalar; 7],
+    // Goldilocks CAPACITY=63 packs 1600 sponge bits into 26 scalars (Stark's 252-bit field
+    // gave 7). Vec keeps it field-agnostic instead of a fixed [Scalar; 7] that panics on Goldilocks.
+    ctx_inject_packed: Vec<Scalar>,
     ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
     ctx_squeeze: [bool; SHAKE256_DIGEST_LENGTH_BITS],
     dob_byte_index: usize,
@@ -90,7 +100,8 @@ where
 
 impl<Scalar> AadhaarAgeProofCircuit<Scalar>
 where
-    Scalar: PrimeFieldBits,
+    // Scalar: PrimeFieldBits,
+    Scalar: PrimeFieldBits + IvcHash,
 {
     pub fn default(h: PublicKey, s2: Polynomial) -> Self {
         Self {
@@ -103,7 +114,12 @@ where
             s2_chunk_i: [0u16; 68],
             bit_array: [false; 68],
             h: h,
-            ctx_inject_packed: [Scalar::ZERO; 7],
+            // ctx_inject_packed: [Scalar::ZERO; 7],
+            ctx_inject_packed: vec![
+                Scalar::ZERO;
+                (1600 + Scalar::CAPACITY as usize - 1)
+                    / Scalar::CAPACITY as usize
+            ],
             ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
             ctx_squeeze: [false; SHAKE256_DIGEST_LENGTH_BITS],
             dob_byte_index: 0,
@@ -111,6 +127,29 @@ where
         }
     }
 
+    // fn update_nullifier(
+    //     prev_nullifier: Scalar,
+    //     l2_norm_sum: u64,
+    //     ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
+    //     msg: &Vec<u8>,
+    // ) -> Scalar {
+    //     let ctx_inject: [bool; 1600] = library_shake256_inject(
+    //         [false; 1600],
+    //         msg.clone(),
+    //     );
+    //     let ctx_inject_packed = compute_multipacking::<Scalar>(&ctx_inject);
+    //     assert!(ctx_inject_packed.len() == 7);
+    //     let ctx_absorb_packed = compute_multipacking::<Scalar>(&ctx_absorb);
+    //     let mut nullifier_preimage = ctx_inject_packed.clone();
+    //     nullifier_preimage.push(Scalar::from(l2_norm_sum));
+    //     nullifier_preimage.extend(ctx_absorb_packed);
+    //     nullifier_preimage.push(prev_nullifier);
+    //     let hasher_nullifier =
+    //         PoseidonHasher::<Scalar>::new(nullifier_preimage.len() as u32);
+    //     let next_nullifier = hasher_nullifier.hash(&nullifier_preimage);
+
+    //     next_nullifier
+    // }
     fn update_nullifier(prev_nullifier: Scalar, msg: &[u8], is_first: bool) -> Scalar {
         let mut block;
         if is_first {
@@ -145,17 +184,39 @@ where
             "Expected nonce-prefixed Falcon message"
         );
 
+        // let msg_blocks: Vec<[u8; 136]> = shake256_msg_blocks(&msg);
+
+        // let ctx_inject: [bool; 1600] = library_shake256_inject([false; 1600], msg.to_vec());
+        // let ctx_inject_bits = ctx_inject.to_vec();
+        // 254 bools per scalar for multipacking
+        // let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
+        // println!("ctx_inject_packed len: {}", ctx_inject_packed.len());
+        // let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
+
+        // let c_msg = &msg[NONCE_LENGTH_BYTES..];
+        // let c: Polynomial = Polynomial::from_hash_of_message(c_msg, sig.nonce());
+        // let c_scalars: Vec<Scalar> = c.coeff().iter().map(|&x| Scalar::from(x as u64)).collect();
+        // let c_hasher = PoseidonHasher::<Scalar>::new(c_scalars.len() as u32);
+        // let hash_c = c_hasher.hash(&c_scalars);
+
         let current_date_bits = bytes_to_bits(current_date_bytes);
         let current_date_scalars = compute_multipacking::<Scalar>(&current_date_bits);
-        assert_eq!(current_date_scalars.len(), 1);
-        let current_date_scalar = current_date_scalars[0];
+        // assert_eq!(current_date_scalars.len(), 1);          // held for the 252-bit Stark field
+        // let current_date_scalar = current_date_scalars[0];
+        // Goldilocks CAPACITY=63 < 80 date bits, so the 10-byte date packs into 2 scalars (Stark: 1).
+        let date_slots =
+            (DATE_LENGTH_BYTES * 8 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
+        assert_eq!(current_date_scalars.len(), date_slots);
 
-        vec![
-            initial_opcode,
-            // hash_c,
-            // ctx_inject_packed[0],
-            current_date_scalar,
-        ]
+        // vec![
+        //     initial_opcode,
+        //     // hash_c,
+        //     // ctx_inject_packed[0],
+        //     current_date_scalar,
+        // ]
+        let mut z0 = vec![initial_opcode];
+        z0.extend(current_date_scalars); // [opcode, date_0, .. date_{date_slots-1}]
+        z0
     }
 
     pub fn new_state_sequence(
@@ -188,7 +249,21 @@ where
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
-        assert!(ctx_inject_packed.len() == 7);
+        // assert!(ctx_inject_packed.len() == 7);
+        // assert!(
+        //     ctx_inject_packed.len() == 26,
+        //     "Expected 26 packed scalars, got {}",
+        //     ctx_inject_packed.len()
+        // );
+        // dynamic length check: 7 for the Stark field, 26 for Goldilocks (CAPACITY=63).
+        let expected_inject_packed =
+            (1600 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
+        assert_eq!(
+            ctx_inject_packed.len(),
+            expected_inject_packed,
+            "ctx_inject should pack to {expected_inject_packed} scalars for this field, got {}",
+            ctx_inject_packed.len()
+        );
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
 
         let mut ctx_squeeze: [bool; 1600] = ctx_inject.clone();
@@ -227,7 +302,8 @@ where
             dob_byte_index: aadhaar_qr_data.dob_byte_index,
             l2_norm_sum: l2_norm_sum,
             ctx_absorb: ctx_absorb.clone(),
-            ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
+            // ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
+            ctx_inject_packed: ctx_inject_packed.clone(),
             s2: s2.clone(),
             prev_nullifier: prev_nullifier,
             h: pk.clone(),
@@ -266,16 +342,6 @@ where
                 // sample c coefficient as concatenation of 2 8-bit little-endian values from the SHAKE256 XOR stream
                 let c_coeff: u16 = shake_sample_u16(&ctx_squeeze, 16 * k);
                 let flag_success = c_coeff < MODULUS_THRESHOLD;
-                // let c_coeff = ctx_squeeze[16 * k..16 * (k + 1)]
-                //     .iter()
-                //     .rev()
-                //     .enumerate()
-                //     .fold(0u16, |acc, (i, &b)| acc + ((b as u16) << i));
-                // let flag_reject = if c_coeff >= MODULUS_THRESHOLD {
-                //     true
-                // } else {
-                //     false
-                // };
                 let c_modq = (c_coeff as u32 % MODULUS as u32) as u16;
                 let flag_coeff_c_less_2h = if c_modq < prod_s2h[k] { true } else { false };
                 // coefficients of both c and prod_s2h are already modulo q.
@@ -384,7 +450,8 @@ where
                 dob_byte_index: aadhaar_qr_data.dob_byte_index,
                 l2_norm_sum: l2_norm_sum,
                 ctx_absorb: ctx_absorb.clone(),
-                ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
+                // ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
+                ctx_inject_packed: ctx_inject_packed.clone(),
                 s2: s2.clone(),
                 prev_nullifier: prev_nullifier,
                 h: pk.clone(),
@@ -430,10 +497,17 @@ where
 
 impl<Scalar> StepCircuit<Scalar> for AadhaarAgeProofCircuit<Scalar>
 where
-    Scalar: PrimeFieldBits + PartialOrd,
+    // Scalar: PrimeFieldBits + PartialOrd,
+    Scalar: PrimeFieldBits + PartialOrd + IvcHash,
 {
     fn arity(&self) -> usize {
-        2
+        // 2
+        // opcode + payload. The payload carries the single-element io_hash on most steps and
+        // the packed current date on step 0; the date needs the most slots (2 over Goldilocks,
+        // CAPACITY=63 < 80 date bits; it was 1 over the 252-bit Stark field).
+        let date_slots =
+            (DATE_LENGTH_BYTES * 8 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
+        1 + date_slots
     }
 
     fn synthesize<CS: ConstraintSystem<Scalar>>(
@@ -957,26 +1031,9 @@ where
             &ctx_squeeze_vars,
         )?;
 
-        // XOR message block with keccak state
-        // let mut absorb_xor_msg = msg_vars
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(i, b)| {
-        //         Boolean::xor(
-        //             cs.namespace(|| format!("absorb_xor_msg_{}", i)),
-        //             b,
-        //             &ctx_absorb_vars[i],
-        //         )
-        //     })
-        //     .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
-        // absorb_xor_msg.extend(
-        //     ctx_absorb_vars[SHAKE256_BLOCK_LENGTH_BITS..]
-        //         .iter()
-        //         .cloned(),
-        // );
-
         let flag_shake_active = current_shake_opcode.not();
 
+        // KECCAK.absorb(msg_vars,ctx_absorb_vars): XOR 1088 bits of msg_vars with first 1088 bits of ctx_absorb_vars, then apply keccak round permutation on the result prefixed to the remaining bits of ctx_absorb_vars
         let mut absorb_xor_msg = msg_vars
             .iter()
             .enumerate()
@@ -1006,12 +1063,6 @@ where
             &flag_shake_active,
         )?;
 
-        // apply keccak round permuation on ctx_absorb_vars XORed with message block
-        // ctx_absorb_vars = keccak_f_1600(
-        //     cs.namespace(|| "SHAKE256 round permutation on ctx_absorb_vars"),
-        //     &absorb_xor_msg,
-        // )?;
-
         let flag_coeff = less_than_or_equal(
             cs.namespace(|| "flag_coeff"),
             &coeff_index_after,
@@ -1026,7 +1077,7 @@ where
             &flag_coeff,
         )?;
 
-        // Enforce next_coeff_index = min(coeff_index, 512)
+        // enforce next_coeff_index = min(coeff_index, 512)
         cs.enforce(
             || "enforce next_coeff_index = min(coeff_index, 512)",
             |lc| lc + next_coeff_index.get_variable(),
@@ -1034,18 +1085,7 @@ where
             |lc| lc + min_512_coeff_index.get_variable(),
         );
 
-        // let l2_norm_sum_inc = l2_norm_sum_var.add(
-        //     cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_update"),
-        //     &sum_aggregated,
-        // )?;
-        // // Skip l2_norm_sum update if coeff_index > 512
-        // l2_norm_sum_var = conditionally_select(
-        //     cs.namespace(|| "l2_norm_sum conditional select"),
-        //     &l2_norm_sum_inc,
-        //     &l2_norm_sum_var,
-        //     &flag_coeff,
-        // )?;
-        // Ensures l2_norm_sum updated only for coeff_index < 512
+        // ensures l2_norm_sum updated only for coeff_index < 512
         l2_norm_sum_var = l2_norm_sum_var.add(
             cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_aggregated"),
             &sum_aggregated,
@@ -1096,79 +1136,6 @@ where
             &flag_final_absorb,
         )?;
 
-        // let step_i_val = (self.coeff_index / 64) % 7;
-        // let step_i =
-        //     AllocatedNum::alloc(cs.namespace(|| "step_i"), || Ok(Scalar::from(step_i_val)))?;
-
-        // // q = (coeff_index/64) / 7  =>  0 for coeff_index < 448, 1 for >= 448
-        // let q_val = (self.coeff_index / 64) / 7;
-        // let q = AllocatedNum::alloc(cs.namespace(|| "step_i_q"), || Ok(Scalar::from(q_val)))?;
-
-        // // 1-bit range check for q
-        // let _ = num_to_bits(cs.namespace(|| "q_bits"), &q, 1)?;
-
-        // // 3-bit range check for step_i
-        // let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
-
-        // // coeff_index = 64*step_i + 448*q   (448 = 7*64)
-        // cs.enforce(
-        //     || "64 * step_i + 448 * q = coeff_index_init",
-        //     |lc| {
-        //         lc + (Scalar::from(64u64), step_i.get_variable())
-        //             + (Scalar::from(448u64), q.get_variable())
-        //     },
-        //     |lc| lc + CS::one(),
-        //     |lc| lc + coeff_index_init.get_variable(),
-        // );
-
-        // // cur_shake_block must equal ctx_inject_packed[step_i]
-        // // let cur_expected = select_from_vec_linear(
-        // //     cs.namespace(|| "sel_cur_shake"),
-        // //     &ctx_inject_packed_vars,
-        // //     &step_i,
-        // // )?;
-        // // cs.enforce(
-        // //     || "cur_shake_block == ctx_inject_packed[step_i]",
-        // //     |lc| lc + cur_expected.get_variable() - cur_shake_block.get_variable(),
-        // //     |lc| lc + CS::one(),
-        // //     |lc| lc,
-        // // );
-
-        // let flag_at_max = alloc_num_equals_constant(
-        //     cs.namespace(|| "coeff_index_init == 512"),
-        //     &coeff_index_init,
-        //     Scalar::from(512u64),
-        // )?;
-
-        // // next_idx = (step_i + 1) % 7
-        // let const_zero = alloc_constant(cs.namespace(|| "const_0"), Scalar::ZERO)?;
-        // let step_plus1 = step_i.add(cs.namespace(|| "step_plus1"), &var1)?;
-        // let step_plus1_eq_7 = alloc_num_equals_constant(
-        //     cs.namespace(|| "step_plus1_eq_7"),
-        //     &step_plus1,
-        //     Scalar::from(7u64),
-        // )?;
-        // let next_idx = conditionally_select(
-        //     cs.namespace(|| "next_idx = step_plus1==7 ? 0 : step_plus1"),
-        //     &const_zero,
-        //     &step_plus1,
-        //     &step_plus1_eq_7,
-        // )?;
-
-        // let shake_block_next_normal = select_from_vec_linear(
-        //     cs.namespace(|| "sel_next_shake"),
-        //     &ctx_inject_packed_vars,
-        //     &next_idx,
-        // )?;
-
-        // If coeff_index==512, freeze block index else increment
-        // let shake_block_next = conditionally_select(
-        //     cs.namespace(|| "freeze shake_block if at max"),
-        //     cur_shake_block,
-        //     &shake_block_next_normal,
-        //     &flag_at_max,
-        // )?;
-
         // remove nonce bytes, then mask timestamp bytes.
         let mut msg_without_timestamp_nonce: Vec<Boolean> =
             msg_vars[NONCE_LENGTH_BYTES * 8..].to_vec();
@@ -1218,14 +1185,6 @@ where
             &flag_shake_active,
         )?;
 
-        // constrain the next nullifier
-        // let next_nullifier = conditionally_select(
-        //     cs.namespace(|| "next_nullifier conditional select"),
-        //     &temp_nullifier_1,
-        //     &temp_nullifier_2,
-        //     &flag_first_step,
-        // )?;
-
         let mut next_io_hash_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
         next_io_hash_preimage.push(l2_norm_sum_var);
         next_io_hash_preimage.extend(ctx_absorb_packed_vars);
@@ -1248,12 +1207,8 @@ where
         for bit in msg_for_delimiter_count[..NONCE_LENGTH_BYTES * 8].iter_mut() {
             *bit = Boolean::Constant(false);
         }
-        // let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
-        //     cs.namespace(|| "check if delimiter count before DoB is correct"),
-        //     &msg_vars,
-        //     &dob_byte_index,
-        // )?;
-        let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
+
+        let delimiter_count = delimiter_count_before_and_within_dob_is_correct(
             cs.namespace(|| "check if delimiter count before DoB is correct"),
             &msg_for_delimiter_count,
             &dob_byte_index,
@@ -1261,7 +1216,7 @@ where
         boolean_implies(
             cs.namespace(|| "if first SHAKE256 step then delimiter count must be correct"),
             &flag_first_step,
-            &delimiter_count_correct,
+            &delimiter_count,
         )?;
 
         let mut shift_bits =
@@ -1289,8 +1244,19 @@ where
             &flag_first_step,
         )?;
 
-        let mut current_date_bits = z[1].to_bits_le(cs.namespace(|| "alloc current date bits"))?;
-        current_date_bits.truncate(DATE_LENGTH_BYTES * 8);
+        // let mut current_date_bits = z[1].to_bits_le(cs.namespace(|| "alloc current date bits"))?;
+        // current_date_bits.truncate(DATE_LENGTH_BYTES * 8);
+        // Goldilocks: the 80-bit date spans z[1] (low CAPACITY bits) and z[2..] (the remainder).
+        let cap = Scalar::CAPACITY as usize;
+        let date_slots = (DATE_LENGTH_BYTES * 8 + cap - 1) / cap;
+        let mut current_date_bits: Vec<Boolean> = Vec::with_capacity(DATE_LENGTH_BYTES * 8);
+        for s in 0..date_slots {
+            let mut slot_bits =
+                z[1 + s].to_bits_le(cs.namespace(|| format!("current date slot {s} bits")))?;
+            let remaining = DATE_LENGTH_BYTES * 8 - s * cap;
+            slot_bits.truncate(remaining.min(cap));
+            current_date_bits.extend(slot_bits);
+        }
 
         let (current_day, current_month, current_year) = get_day_month_year_conditional(
             cs.namespace(|| "get current birth day, month, year"),
@@ -1321,13 +1287,6 @@ where
             &age_gte_18,
         )?;
 
-        //
-        // let flag_last_step = Boolean::and(
-        //     cs.namespace(|| "final step flag"),
-        //     &flag_absorb_last_step,
-        //     &flag_coeff.not(),
-        // )?;
-
         // once all message blocks have been absorbed and all coefficients have been processed
         let flag_last_step = Boolean::and(
             cs.namespace(|| "final step flag"),
@@ -1335,22 +1294,26 @@ where
             &flag_coeff.not(),
         )?;
 
-        let last_z_out = vec![
-            next_opcode.clone(),
-            // hash_c.clone(),
-            // shake_block_next.clone(),
-            next_nullifier.clone(),
-        ];
+        // z_out grows to arity() elements: [opcode, payload0, payload1..]. payload0 carries
+        // io_hash/nullifier; the extra payload slots (the date's upper slots) are zero after step 0.
+        let n_pad = self.arity() - 2; // extra payload slots beyond [opcode, payload0]
+        let zero_pad = alloc_constant(cs.namespace(|| "z_out zero pad"), Scalar::ZERO)?;
+
+        // let last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
+        let mut last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
+        for _ in 0..n_pad {
+            last_z_out.push(zero_pad.clone());
+        }
+        let mut norm_z_out = vec![next_opcode.clone(), next_io_hash.clone()];
+        for _ in 0..n_pad {
+            norm_z_out.push(zero_pad.clone());
+        }
 
         let z_out = conditionally_select_vec(
             cs.namespace(|| "Choose between outputs of last opcode and others"),
             &last_z_out,
-            &vec![
-                next_opcode.clone(),
-                // hash_c.clone(),
-                // shake_block_next.clone(),
-                next_io_hash.clone(),
-            ],
+            // &vec![next_opcode.clone(), next_io_hash.clone()],
+            &norm_z_out,
             &flag_last_step,
         )?;
 

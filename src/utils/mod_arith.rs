@@ -246,11 +246,11 @@ where
     )?;
 
     let half_q = alloc_constant(
-        cs.namespace(|| "alloc_constant (q-1)/2"),
+        cs.namespace(|| "alloc_constant (q-1) by 2"),
         Scalar::from(MODULUS_MINUS_1_OVER_TWO as u64),
     )?;
     let flag_less_than_half_q =
-        less_than_or_equal(cs.namespace(|| "a <= (q-1)/2"), a, &half_q, 14)?;
+        less_than_or_equal(cs.namespace(|| "a <= (q-1) by 2"), a, &half_q, 14)?;
 
     conditionally_select(
         cs.namespace(|| "normalize_half_q"),

@@ -1,5 +1,3 @@
-pub mod pub_c;
-
 use crate::subarray::{
     create_bit_array, l2normsquare_select, l2normsquare_subarray, pad_coeff, pad_vec_from_bit_array,
 };
@@ -39,15 +37,15 @@ use bellpepper_nonnative::{
     mp::bignat::{nat_to_limbs, BigNat},
     util::{bit::Bit, gadget::Gadget, num::Num},
 };
-// use bitvec::vec;
-// use core::hash;
+use bitvec::vec;
+use core::hash;
 use falcon_rust::{
     KeyPair, NTTPolynomial, Polynomial, PublicKey, Signature, LOG_N, MODULUS, MODULUS_THRESHOLD, N,
     SIG_L2_BOUND,
 };
 use ff::{PrimeField, PrimeFieldBits};
 use keccak::f1600;
-use nova_snark::traits::circuit::StepCircuit;
+
 use num_bigint::{BigInt, Sign};
 use sha2::{compress256, digest::generic_array::GenericArray};
 use std::{cmp::max, ops::Mul};
@@ -228,12 +226,7 @@ where
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
-        // assert!(ctx_inject_packed.len() == 7);
-        // assert!(
-        //     ctx_inject_packed.len() == 26,
-        //     "Expected 26 packed scalars, got {}",
-        //     ctx_inject_packed.len()
-        // );
+        assert!(ctx_inject_packed.len() == 7);
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
 
         let mut ctx_squeeze: [bool; 1600] = ctx_inject.clone();
@@ -311,16 +304,6 @@ where
                 // sample c coefficient as concatenation of 2 8-bit little-endian values from the SHAKE256 XOR stream
                 let c_coeff: u16 = shake_sample_u16(&ctx_squeeze, 16 * k);
                 let flag_success = c_coeff < MODULUS_THRESHOLD;
-                // let c_coeff = ctx_squeeze[16 * k..16 * (k + 1)]
-                //     .iter()
-                //     .rev()
-                //     .enumerate()
-                //     .fold(0u16, |acc, (i, &b)| acc + ((b as u16) << i));
-                // let flag_reject = if c_coeff >= MODULUS_THRESHOLD {
-                //     true
-                // } else {
-                //     false
-                // };
                 let c_modq = (c_coeff as u32 % MODULUS as u32) as u16;
                 let flag_coeff_c_less_2h = if c_modq < prod_s2h[k] { true } else { false };
                 // coefficients of both c and prod_s2h are already modulo q.
@@ -458,6 +441,19 @@ where
 
         aadhaar_steps
     }
+}
+
+pub trait StepCircuit<Scalar>
+where
+    Scalar: PrimeFieldBits + PartialOrd,
+{
+    fn arity(&self) -> usize;
+
+    fn synthesize<CS: ConstraintSystem<Scalar>>(
+        &self,
+        cs: &mut CS,
+        z: &[AllocatedNum<Scalar>],
+    ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError>;
 }
 
 impl<Scalar> StepCircuit<Scalar> for AadhaarAgeProofCircuit<Scalar>
@@ -989,26 +985,9 @@ where
             &ctx_squeeze_vars,
         )?;
 
-        // XOR message block with keccak state
-        // let mut absorb_xor_msg = msg_vars
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(i, b)| {
-        //         Boolean::xor(
-        //             cs.namespace(|| format!("absorb_xor_msg_{}", i)),
-        //             b,
-        //             &ctx_absorb_vars[i],
-        //         )
-        //     })
-        //     .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
-        // absorb_xor_msg.extend(
-        //     ctx_absorb_vars[SHAKE256_BLOCK_LENGTH_BITS..]
-        //         .iter()
-        //         .cloned(),
-        // );
-
         let flag_shake_active = current_shake_opcode.not();
 
+        // KECCAK.absorb(msg_vars,ctx_absorb_vars): XOR 1088 bits of msg_vars with first 1088 bits of ctx_absorb_vars, then apply keccak round permutation on the result prefixed to the remaining bits of ctx_absorb_vars
         let mut absorb_xor_msg = msg_vars
             .iter()
             .enumerate()
@@ -1038,12 +1017,6 @@ where
             &flag_shake_active,
         )?;
 
-        // apply keccak round permuation on ctx_absorb_vars XORed with message block
-        // ctx_absorb_vars = keccak_f_1600(
-        //     cs.namespace(|| "SHAKE256 round permutation on ctx_absorb_vars"),
-        //     &absorb_xor_msg,
-        // )?;
-
         let flag_coeff = less_than_or_equal(
             cs.namespace(|| "flag_coeff"),
             &coeff_index_after,
@@ -1058,7 +1031,7 @@ where
             &flag_coeff,
         )?;
 
-        // Enforce next_coeff_index = min(coeff_index, 512)
+        // enforce next_coeff_index = min(coeff_index, 512)
         cs.enforce(
             || "enforce next_coeff_index = min(coeff_index, 512)",
             |lc| lc + next_coeff_index.get_variable(),
@@ -1066,18 +1039,7 @@ where
             |lc| lc + min_512_coeff_index.get_variable(),
         );
 
-        // let l2_norm_sum_inc = l2_norm_sum_var.add(
-        //     cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_update"),
-        //     &sum_aggregated,
-        // )?;
-        // // Skip l2_norm_sum update if coeff_index > 512
-        // l2_norm_sum_var = conditionally_select(
-        //     cs.namespace(|| "l2_norm_sum conditional select"),
-        //     &l2_norm_sum_inc,
-        //     &l2_norm_sum_var,
-        //     &flag_coeff,
-        // )?;
-        // Ensures l2_norm_sum updated only for coeff_index < 512
+        // ensures l2_norm_sum updated only for coeff_index < 512
         l2_norm_sum_var = l2_norm_sum_var.add(
             cs.namespace(|| "l2_norm_sum = l2_norm_sum + sum_aggregated"),
             &sum_aggregated,
@@ -1128,79 +1090,6 @@ where
             &flag_final_absorb,
         )?;
 
-        // let step_i_val = (self.coeff_index / 64) % 7;
-        // let step_i =
-        //     AllocatedNum::alloc(cs.namespace(|| "step_i"), || Ok(Scalar::from(step_i_val)))?;
-
-        // // q = (coeff_index/64) / 7  =>  0 for coeff_index < 448, 1 for >= 448
-        // let q_val = (self.coeff_index / 64) / 7;
-        // let q = AllocatedNum::alloc(cs.namespace(|| "step_i_q"), || Ok(Scalar::from(q_val)))?;
-
-        // // 1-bit range check for q
-        // let _ = num_to_bits(cs.namespace(|| "q_bits"), &q, 1)?;
-
-        // // 3-bit range check for step_i
-        // let _ = num_to_bits(cs.namespace(|| "step_i_bits"), &step_i, 3)?;
-
-        // // coeff_index = 64*step_i + 448*q   (448 = 7*64)
-        // cs.enforce(
-        //     || "64 * step_i + 448 * q = coeff_index_init",
-        //     |lc| {
-        //         lc + (Scalar::from(64u64), step_i.get_variable())
-        //             + (Scalar::from(448u64), q.get_variable())
-        //     },
-        //     |lc| lc + CS::one(),
-        //     |lc| lc + coeff_index_init.get_variable(),
-        // );
-
-        // // cur_shake_block must equal ctx_inject_packed[step_i]
-        // // let cur_expected = select_from_vec_linear(
-        // //     cs.namespace(|| "sel_cur_shake"),
-        // //     &ctx_inject_packed_vars,
-        // //     &step_i,
-        // // )?;
-        // // cs.enforce(
-        // //     || "cur_shake_block == ctx_inject_packed[step_i]",
-        // //     |lc| lc + cur_expected.get_variable() - cur_shake_block.get_variable(),
-        // //     |lc| lc + CS::one(),
-        // //     |lc| lc,
-        // // );
-
-        // let flag_at_max = alloc_num_equals_constant(
-        //     cs.namespace(|| "coeff_index_init == 512"),
-        //     &coeff_index_init,
-        //     Scalar::from(512u64),
-        // )?;
-
-        // // next_idx = (step_i + 1) % 7
-        // let const_zero = alloc_constant(cs.namespace(|| "const_0"), Scalar::ZERO)?;
-        // let step_plus1 = step_i.add(cs.namespace(|| "step_plus1"), &var1)?;
-        // let step_plus1_eq_7 = alloc_num_equals_constant(
-        //     cs.namespace(|| "step_plus1_eq_7"),
-        //     &step_plus1,
-        //     Scalar::from(7u64),
-        // )?;
-        // let next_idx = conditionally_select(
-        //     cs.namespace(|| "next_idx = step_plus1==7 ? 0 : step_plus1"),
-        //     &const_zero,
-        //     &step_plus1,
-        //     &step_plus1_eq_7,
-        // )?;
-
-        // let shake_block_next_normal = select_from_vec_linear(
-        //     cs.namespace(|| "sel_next_shake"),
-        //     &ctx_inject_packed_vars,
-        //     &next_idx,
-        // )?;
-
-        // If coeff_index==512, freeze block index else increment
-        // let shake_block_next = conditionally_select(
-        //     cs.namespace(|| "freeze shake_block if at max"),
-        //     cur_shake_block,
-        //     &shake_block_next_normal,
-        //     &flag_at_max,
-        // )?;
-
         // remove nonce bytes, then mask timestamp bytes.
         let mut msg_without_timestamp_nonce: Vec<Boolean> =
             msg_vars[NONCE_LENGTH_BYTES * 8..].to_vec();
@@ -1250,14 +1139,6 @@ where
             &flag_shake_active,
         )?;
 
-        // constrain the next nullifier
-        // let next_nullifier = conditionally_select(
-        //     cs.namespace(|| "next_nullifier conditional select"),
-        //     &temp_nullifier_1,
-        //     &temp_nullifier_2,
-        //     &flag_first_step,
-        // )?;
-
         let mut next_io_hash_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
         next_io_hash_preimage.push(l2_norm_sum_var);
         next_io_hash_preimage.extend(ctx_absorb_packed_vars);
@@ -1280,12 +1161,8 @@ where
         for bit in msg_for_delimiter_count[..NONCE_LENGTH_BYTES * 8].iter_mut() {
             *bit = Boolean::Constant(false);
         }
-        // let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
-        //     cs.namespace(|| "check if delimiter count before DoB is correct"),
-        //     &msg_vars,
-        //     &dob_byte_index,
-        // )?;
-        let delimiter_count_correct = delimiter_count_before_and_within_dob_is_correct(
+
+        let delimiter_count = delimiter_count_before_and_within_dob_is_correct(
             cs.namespace(|| "check if delimiter count before DoB is correct"),
             &msg_for_delimiter_count,
             &dob_byte_index,
@@ -1293,7 +1170,7 @@ where
         boolean_implies(
             cs.namespace(|| "if first SHAKE256 step then delimiter count must be correct"),
             &flag_first_step,
-            &delimiter_count_correct,
+            &delimiter_count,
         )?;
 
         let mut shift_bits =
@@ -1353,13 +1230,6 @@ where
             &age_gte_18,
         )?;
 
-        //
-        // let flag_last_step = Boolean::and(
-        //     cs.namespace(|| "final step flag"),
-        //     &flag_absorb_last_step,
-        //     &flag_coeff.not(),
-        // )?;
-
         // once all message blocks have been absorbed and all coefficients have been processed
         let flag_last_step = Boolean::and(
             cs.namespace(|| "final step flag"),
@@ -1367,22 +1237,12 @@ where
             &flag_coeff.not(),
         )?;
 
-        let last_z_out = vec![
-            next_opcode.clone(),
-            // hash_c.clone(),
-            // shake_block_next.clone(),
-            next_nullifier.clone(),
-        ];
+        let last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
 
         let z_out = conditionally_select_vec(
             cs.namespace(|| "Choose between outputs of last opcode and others"),
             &last_z_out,
-            &vec![
-                next_opcode.clone(),
-                // hash_c.clone(),
-                // shake_block_next.clone(),
-                next_io_hash.clone(),
-            ],
+            &vec![next_opcode.clone(), next_io_hash.clone()],
             &flag_last_step,
         )?;
 

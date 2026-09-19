@@ -9,7 +9,7 @@ nova-aadhaar-qr = { git = "https://github.com/avras/nova-aadhaar-qr" }
 bellpepper = { version = "0.4.0", default-features = false }
 bellpepper-core = { version = "0.4.0", default-features = false }
 bellpepper-nonnative = { git = "https://github.com/avras/bellperson-nonnative.git" }
-ff = { version = "0.13.0", features = ["derive"] }
+ff = { version = "0.13.0", features = ["derive", "derive_bits"] }
 nova-snark = { git = "https://github.com/microsoft/Nova.git", default-features = false, rev = "ac8b057cd6fbc2aba7b2888a9b9c37fec9119d45" }
 cyclotomic-rings = { git = "https://github.com/nethermindeth/latticefold"}
 stark-rings = { git = "https://github.com/NethermindEth/stark-rings.git", branch = "main", default-features = false }
@@ -39,6 +39,8 @@ rand = "0.10.0"
 serde_json = "1.0.149"
 qrcode = "0.14.1"
 ark-ff = { version = "0.4", default-features = false }
+# plonky2 = { git = "https://github.com/0xPolygonZero/plonky2", rev = "5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f", default-features = false, features = ["std"] }
+qp-plonky2-core = { version = "1.5.6", default-features = false, features = ["std"] }
 
 [features]
 default = [ "falcon-512", "parallel" ]
@@ -53,3 +55,7 @@ path = "examples/nova/age_proof.rs"
 [[example]]
 name = "latticefold_age_proof"
 path = "examples/latticefold/age_proof.rs"
+
+[[example]]
+name = "latticefold_age_proof_stark"
+path = "examples/latticefold/age_proof_starkfield.rs"
