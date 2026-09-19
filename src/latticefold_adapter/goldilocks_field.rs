@@ -26,6 +26,14 @@ pub fn embed_slot(v: &GoldilocksFq) -> Fq3 {
     Fq3::from_base_prime_field(to_ark_fq(v))
 }
 
+/// Fq -> u64.
+#[inline]
+pub fn to_canonical_u64(v: &GoldilocksFq) -> u64 {
+    let repr = v.to_repr();
+    let b = repr.as_ref();
+    u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +99,25 @@ mod tests {
         assert_step_circuit_scalar::<GoldilocksFq>();
         fn assert_ord<T: Ord>() {}
         assert_ord::<GoldilocksFq>();
+    }
+
+    #[test]
+    fn test_to_canonical_u64_round_trips() {
+        for v in [
+            0u64,
+            1,
+            2,
+            7,
+            12289,
+            u32::MAX as u64,
+            (1u64 << 63),
+            18446744069414584320,
+        ] {
+            assert_eq!(
+                to_canonical_u64(&GoldilocksFq::from(v)),
+                v % 18446744069414584321,
+                "u64 bridge at {v}"
+            );
+        }
     }
 }
