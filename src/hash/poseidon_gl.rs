@@ -263,7 +263,7 @@ pub fn permute_circuit<CS: ConstraintSystem<F>>(
 }
 
 /// The Poseidon-GL sponge in-circuit; equals the native hash_no_pad.
-/// Returns 4 elements (do not truncate).
+/// Returns 4 elements.
 pub fn hash_in_circuit<CS: ConstraintSystem<F>>(
     cs: &mut CS,
     inputs: &[AllocatedNum<F>],
@@ -297,29 +297,26 @@ pub fn hash_in_circuit<CS: ConstraintSystem<F>>(
     ])
 }
 
-/// Thin wrapper mirroring the old PoseidonHasher surface (output is now [_; 4]).
-pub struct PoseidonHasherGl;
-impl PoseidonHasherGl {
+pub struct PoseidonHasher<Scalar>(core::marker::PhantomData<Scalar>);
+
+impl<Scalar: IvcHash> PoseidonHasher<Scalar> {
     pub fn new(_num_absorbs: u32) -> Self {
-        Self
+        Self(core::marker::PhantomData)
     }
-    pub fn hash(&self, values: &[F]) -> [F; HASH_OUT] {
-        hash_no_pad(values)
+    /// Native single-element digest (element [0] of the 4-element Plonky2 digest).
+    pub fn hash(&self, values: &[Scalar]) -> Scalar {
+        Scalar::ivc_hash(values)[0]
     }
-    pub fn hash_in_circuit<CS: ConstraintSystem<F>>(
+    /// In-circuit single-element digest; equals `hash` on the witness.
+    pub fn hash_in_circuit<CS: ConstraintSystem<Scalar>>(
         &self,
         cs: &mut CS,
-        values: &[AllocatedNum<F>],
-    ) -> Result<[AllocatedNum<F>; HASH_OUT], SynthesisError> {
-        hash_in_circuit(cs, values)
+        values: &[AllocatedNum<Scalar>],
+    ) -> Result<AllocatedNum<Scalar>, SynthesisError> {
+        Ok(Scalar::ivc_hash_in_circuit(cs, values)?[0].clone())
     }
 }
 
-/// IVC hash abstraction for the running io_hash / nullifier commitment. `DIGEST` is the
-/// number of field elements in one digest. For Goldilocks it is 4 (Plonky2 `PoseidonHash`,
-/// 256-bit / 128-bit collision resistance); a 1-element digest would be only ~32-bit
-/// collision resistant over a 64-bit field. The Nova/Stark path keeps its own hashing and
-/// does not implement this trait, so it is unaffected.
 pub trait IvcHash: PrimeFieldBits {
     const DIGEST: usize;
     fn ivc_hash(values: &[Self]) -> Vec<Self>;

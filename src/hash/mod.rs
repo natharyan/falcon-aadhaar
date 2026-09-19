@@ -1,3 +1,3 @@
 pub mod poseidon;
-pub mod poseidon_plonky2;
+pub mod poseidon_gl;
 pub mod shake256;

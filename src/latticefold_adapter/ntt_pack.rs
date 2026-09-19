@@ -27,13 +27,14 @@ pub enum PackError {
         expected: usize,
         got: usize,
     },
-    /// lanes disagree on |z|. every lane runs the same circuit, so every witness
-    /// must have the same length; a mismatch means the lanes were not all
-    /// synthesized from the same shape.
     LengthMismatch {
         lane: usize,
         expected: usize,
         got: usize,
+    },
+    BatchRemainder {
+        lanes: usize,
+        k: usize,
     },
     Empty,
 }
@@ -52,6 +53,10 @@ impl core::fmt::Display for PackError {
             } => write!(
                 f,
                 "lane {lane} has |z| = {got}, expected {expected}; all lanes must share one shape"
+            ),
+            PackError::BatchRemainder { lanes, k } => write!(
+                f,
+                "{lanes} lanes is not a multiple of {k} (GoldilocksRingNTT::dimension()); pad first"
             ),
             PackError::Empty => write!(f, "no lanes supplied"),
         }
@@ -93,6 +98,24 @@ pub fn pack_z(z_lanes: &[Vec<GoldilocksFq>]) -> Result<Vec<GoldilocksRingNTT>, P
     }
 
     Ok(z_star)
+}
+
+/// pack N = m * num_lanes() field lanes into m ring R1CS instances
+pub fn pack_z_batched(
+    z_lanes: &[Vec<GoldilocksFq>],
+) -> Result<Vec<Vec<GoldilocksRingNTT>>, PackError> {
+    let k = num_lanes();
+    if z_lanes.is_empty() {
+        return Err(PackError::Empty);
+    }
+    if z_lanes.len() % k != 0 {
+        return Err(PackError::BatchRemainder {
+            lanes: z_lanes.len(),
+            k,
+        });
+    }
+    // Each chunk of k R1CS instances over GoldilocksFq becomes is the NTT transform of a single R1CS instance in GoldilocksRingNTT.
+    z_lanes.chunks(k).map(pack_z).collect()
 }
 
 /// check the R1CS relation (Az) o (Bz) == Cz for a single lane.
@@ -167,6 +190,45 @@ mod tests {
                 "slot {i} does not carry lane {i}'s value"
             );
         }
+    }
+
+    #[test]
+    fn test_batched_pack_splits_into_instances() {
+        let k = num_lanes();
+        let lanes: Vec<Vec<GoldilocksFq>> = (0..(2 * k) as u64)
+            .map(|i| {
+                vec![
+                    GoldilocksFq::from(i),
+                    GoldilocksFq::from(i + 1),
+                    GoldilocksFq::from(i + 2),
+                ]
+            })
+            .collect();
+
+        let instances = pack_z_batched(&lanes).expect("batched pack");
+        assert_eq!(instances.len(), 2, "expected two packed ring instances");
+        for inst in &instances {
+            assert_eq!(
+                inst.len(),
+                3,
+                "each instance has one ring element per coordinate"
+            );
+        }
+
+        assert_eq!(instances[0], pack_z(&lanes[..k]).unwrap());
+        assert_eq!(instances[1], pack_z(&lanes[k..]).unwrap());
+    }
+
+    #[test]
+    fn test_batched_pack_rejects_non_multiple() {
+        let k = num_lanes();
+        let lanes: Vec<Vec<GoldilocksFq>> = (0..(k + 1) as u64)
+            .map(|_| vec![GoldilocksFq::from(1u64)])
+            .collect();
+        assert_eq!(
+            pack_z_batched(&lanes),
+            Err(PackError::BatchRemainder { lanes: k + 1, k })
+        );
     }
 
     #[test]

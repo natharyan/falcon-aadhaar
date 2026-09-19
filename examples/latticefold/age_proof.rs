@@ -15,7 +15,8 @@ use falcon_aadhaar::{
 use falcon_aadhaar::latticefold_adapter::{
     goldilocks_field::GoldilocksFq,
     ntt_pack::check_field_relation,
-    ntt_pack::{num_lanes, pack_z},
+    // ntt_pack::{num_lanes, pack_z},
+    ntt_pack::{num_lanes, pack_z_batched},
     shape_cs::{build_r1cs, get_matrices, ShapeCS},
     utils::{alloc_public_z, negative_control, pad_lanes, synthesize_step, verify_both_sides},
     // stark_field::StarkFq,
@@ -112,12 +113,19 @@ fn main() {
     let num_steps = circuit_sequence.len();
     let k = num_lanes();
     assert_eq!(z0.len(), circuit_sequence[0].arity(), "z0 arity mismatch");
-    assert!(
-        num_steps <= k,
-        "num_steps = {num_steps} exceeds the {k} available NTT slots; a second packed \
-         instance and a fold would be required"
+    // GoldilocksRingNTT exposes only k = 8 NTT slots (the Stark ring had 16), so >k steps
+    // are packed into several instances, each folded by LatticeFold.
+    // assert!(
+    //     num_steps <= k,
+    //     "num_steps = {num_steps} exceeds the {k} available NTT slots; a second packed \
+    //      instance and a fold would be required"
+    // );
+    // println!("Number of steps: {num_steps} (packing into {k} NTT slots)");
+    let num_batches = (num_steps + k - 1) / k; // ceil: 9 steps over 8 slots -> 2 instances
+    let target_lanes = num_batches * k;
+    println!(
+        "Number of steps: {num_steps} (packing into {num_batches} instance(s) of {k} NTT slots)"
     );
-    println!("Number of steps: {num_steps} (packing into {k} NTT slots)");
 
     // shape, once. all steps run the same circuit, so the R1CS is extracted a single
     // time and reused for every lane. this is the structural saving over a monolithic
@@ -165,7 +173,8 @@ fn main() {
         wit_timer.elapsed()
     );
 
-    let n_pad = pad_lanes(&mut z_lanes, k);
+    // let n_pad = pad_lanes(&mut z_lanes, k);
+    let n_pad = pad_lanes(&mut z_lanes, target_lanes);
     println!("Padded {n_pad} lanes by replicating the final step's witness");
 
     let build_timer = Instant::now();
@@ -176,26 +185,42 @@ fn main() {
     assert_eq!(extracted.r1cs.A.ncols, ncols);
 
     let pack_timer = Instant::now();
-    let z_star = pack_z(&z_lanes).expect("packing failed");
-    assert_eq!(z_star.len(), ncols);
+    // let z_star = pack_z(&z_lanes).expect("packing failed");
+    // assert_eq!(z_star.len(), ncols);
+    // println!(
+    //     "Packed {k} lanes into |z*| = {} ring elements in {:?}",
+    //     z_star.len(),
+    //     pack_timer.elapsed()
+    // );
+    let z_stars = pack_z_batched(&z_lanes).expect("packing failed");
+    assert_eq!(z_stars.len(), num_batches);
+    for (b, z_star) in z_stars.iter().enumerate() {
+        assert_eq!(z_star.len(), ncols, "batch {b} has |z*| = {}", z_star.len());
+    }
     println!(
-        "Packed {k} lanes into |z*| = {} ring elements in {:?}",
-        z_star.len(),
+        "Packed {target_lanes} lanes into {num_batches} instance(s) of |z*| = {ncols} ring elements in {:?}",
         pack_timer.elapsed()
     );
 
     verify_both_sides(&extracted, (&a_f, &b_f, &c_f), &z_lanes);
     negative_control(&extracted, (&a_f, &b_f, &c_f), &z_lanes, 3);
-    extracted
-        .check_relation(&z_star)
-        .expect("packed R1CS check_relation failed");
+    // extracted
+    //     .check_relation(&z_star)
+    //     .expect("packed R1CS check_relation failed");
+    for (b, z_star) in z_stars.iter().enumerate() {
+        extracted
+            .check_relation(z_star)
+            .unwrap_or_else(|e| panic!("packed R1CS batch {b} check_relation failed: {e}"));
+    }
 
     println!("Multi-step packing works.");
     println!("real steps       : {num_steps}");
     println!("padded lanes     : {n_pad}");
     println!("NTT slots        : {k}");
+    println!("packed instances : {num_batches}"); // new
     println!("constraints      : {}", extracted.r1cs.A.nrows);
     println!("|z| per lane     : {ncols}");
-    println!("|z*| (ring)      : {}", z_star.len());
+    // println!("|z*| (ring)      : {}", z_star.len());
+    println!("|z*| (ring)      : {ncols} per instance");
     println!("public inputs (l): {}", extracted.r1cs.l);
 }

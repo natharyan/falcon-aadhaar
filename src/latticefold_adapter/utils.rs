@@ -3,7 +3,8 @@ use crate::{
     latticefold_adapter::{
         // stark_field::StarkFq,
         goldilocks_field::GoldilocksFq,
-        ntt_pack::{check_field_relation, pack_z},
+        // ntt_pack::{check_field_relation, pack_z},
+        ntt_pack::{check_field_relation, pack_z_batched},
         shape_cs::{z_vector, BpMatrix, LatticefoldR1CS, ShapeCS},
     },
 };
@@ -107,14 +108,29 @@ pub fn verify_both_sides(
         lane_timer.elapsed()
     );
 
-    let z_star = pack_z(z_lanes).expect("packing failed");
+    // GoldilocksRingNTT has 8 NTT slots, so >8 steps produce several packed instances.
+    // let z_star = pack_z(z_lanes).expect("packing failed");
+    // let check_timer = Instant::now();
+    // match extracted.check_relation(&z_star) {
+    //     Ok(()) => println!(
+    //         "packed R1CS over StarkRingNTT: check_relation OK ({:?})",
+    //         check_timer.elapsed()
+    //     ),
+    //     Err(msg) => panic!("packed R1CS rejects the packed witness:\n  {}", msg),
+    // }
+    let z_stars = pack_z_batched(z_lanes).expect("packing failed");
     let check_timer = Instant::now();
-    match extracted.check_relation(&z_star) {
-        Ok(()) => println!(
-            "packed R1CS over StarkRingNTT: check_relation OK ({:?})",
-            check_timer.elapsed()
-        ),
-        Err(msg) => panic!("packed R1CS rejects the packed witness:\n  {}", msg),
+    for (b, z_star) in z_stars.iter().enumerate() {
+        match extracted.check_relation(z_star) {
+            Ok(()) => println!(
+                "packed R1CS over GoldilocksRingNTT: batch {b} check_relation OK ({:?})",
+                check_timer.elapsed()
+            ),
+            Err(msg) => panic!(
+                "packed R1CS batch {b} rejects the packed witness:\n  {}",
+                msg
+            ),
+        }
     }
 }
 
@@ -130,12 +146,30 @@ pub fn negative_control(
     let last = z_broken[lane].len() - 1;
     z_broken[lane][last] = z_broken[lane][last] + GoldilocksFq::from(1u64);
 
-    let z_star_broken = pack_z(&z_broken).expect("pack");
-    assert!(
-        extracted.check_relation(&z_star_broken).is_err(),
-        "corrupting lane {lane} did not break the packed relation: the NTT slots are \
-         not independent, or the packing is broadcasting instead of transposing"
-    );
+    // The corrupted lane must break only its own batch; the others must still pass.
+    // let z_star_broken = pack_z(&z_broken).expect("pack");
+    // assert!(
+    //     extracted.check_relation(&z_star_broken).is_err(),
+    //     "corrupting lane {lane} did not break the packed relation: the NTT slots are \
+    //      not independent, or the packing is broadcasting instead of transposing"
+    // );
+    let z_stars_broken = pack_z_batched(&z_broken).expect("pack");
+    let k = z_broken.len() / z_stars_broken.len().max(1); // = num_lanes()
+    let broken_batch = lane / k;
+    for (b, z_star) in z_stars_broken.iter().enumerate() {
+        if b == broken_batch {
+            assert!(
+                extracted.check_relation(z_star).is_err(),
+                "corrupting lane {lane} did not break packed batch {b}: the NTT slots are \
+                 not independent, or the packing is broadcasting instead of transposing"
+            );
+        } else {
+            assert!(
+                extracted.check_relation(z_star).is_ok(),
+                "corrupting lane {lane} also broke packed batch {b}: batches are leaking"
+            );
+        }
+    }
     assert!(
         check_field_relation(a_f, b_f, c_f, &z_broken[lane]).is_some(),
         "corrupting lane {lane} did not break its own field relation"

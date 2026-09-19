@@ -1,7 +1,3 @@
-pub mod circuit_starkfq;
-
-// step function circuit over Goldilocks prime field
-
 use crate::subarray::{
     create_bit_array, l2normsquare_select, l2normsquare_subarray, pad_coeff, pad_vec_from_bit_array,
 };
@@ -16,10 +12,7 @@ use crate::{
         calculate_age_in_years, delimiter_count_before_and_within_dob_is_correct,
         get_day_month_year_conditional, left_shift_bytes, DOB_INDEX_BIT_LENGTH,
     },
-    // hash::poseidon::PoseidonHasher,
-    // poseidon_gl: plonky2 Poseidon-over-Goldilocks. PoseidonHasher is a single-element
-    // drop-in (element [0] of the 4-elt digest); IvcHash bounds Scalar to GoldilocksFq.
-    hash::poseidon_gl::{IvcHash, PoseidonHasher},
+    hash::poseidon::PoseidonHasher,
     hash::shake256::{
         keccak_f_1600, library_shake256_inject, library_step_sponge, shake256_gadget,
         shake256_inject, shake256_msg_blocks, shake256_pad101, SHAKE256_BLOCK_LENGTH_BITS,
@@ -88,10 +81,7 @@ where
     bit_array: [bool; 68],
     // c: Polynomial,
     h: PublicKey,
-    // ctx_inject_packed: [Scalar; 7],
-    // Goldilocks CAPACITY=63 packs 1600 sponge bits into 26 scalars (Stark's 252-bit field
-    // gave 7). Vec keeps it field-agnostic instead of a fixed [Scalar; 7] that panics on Goldilocks.
-    ctx_inject_packed: Vec<Scalar>,
+    ctx_inject_packed: [Scalar; 7],
     ctx_absorb: [bool; SHAKE256_DIGEST_LENGTH_BITS],
     ctx_squeeze: [bool; SHAKE256_DIGEST_LENGTH_BITS],
     dob_byte_index: usize,
@@ -100,8 +90,7 @@ where
 
 impl<Scalar> AadhaarAgeProofCircuit<Scalar>
 where
-    // Scalar: PrimeFieldBits,
-    Scalar: PrimeFieldBits + IvcHash,
+    Scalar: PrimeFieldBits,
 {
     pub fn default(h: PublicKey, s2: Polynomial) -> Self {
         Self {
@@ -114,12 +103,7 @@ where
             s2_chunk_i: [0u16; 68],
             bit_array: [false; 68],
             h: h,
-            // ctx_inject_packed: [Scalar::ZERO; 7],
-            ctx_inject_packed: vec![
-                Scalar::ZERO;
-                (1600 + Scalar::CAPACITY as usize - 1)
-                    / Scalar::CAPACITY as usize
-            ],
+            ctx_inject_packed: [Scalar::ZERO; 7],
             ctx_absorb: [false; SHAKE256_DIGEST_LENGTH_BITS],
             ctx_squeeze: [false; SHAKE256_DIGEST_LENGTH_BITS],
             dob_byte_index: 0,
@@ -201,22 +185,15 @@ where
 
         let current_date_bits = bytes_to_bits(current_date_bytes);
         let current_date_scalars = compute_multipacking::<Scalar>(&current_date_bits);
-        // assert_eq!(current_date_scalars.len(), 1);          // held for the 252-bit Stark field
-        // let current_date_scalar = current_date_scalars[0];
-        // Goldilocks CAPACITY=63 < 80 date bits, so the 10-byte date packs into 2 scalars (Stark: 1).
-        let date_slots =
-            (DATE_LENGTH_BYTES * 8 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
-        assert_eq!(current_date_scalars.len(), date_slots);
+        assert_eq!(current_date_scalars.len(), 1);
+        let current_date_scalar = current_date_scalars[0];
 
-        // vec![
-        //     initial_opcode,
-        //     // hash_c,
-        //     // ctx_inject_packed[0],
-        //     current_date_scalar,
-        // ]
-        let mut z0 = vec![initial_opcode];
-        z0.extend(current_date_scalars); // [opcode, date_0, .. date_{date_slots-1}]
-        z0
+        vec![
+            initial_opcode,
+            // hash_c,
+            // ctx_inject_packed[0],
+            current_date_scalar,
+        ]
     }
 
     pub fn new_state_sequence(
@@ -249,21 +226,7 @@ where
         let ctx_inject_bits = ctx_inject.to_vec();
         // 254 bools per scalar for multipacking
         let ctx_inject_packed: Vec<Scalar> = compute_multipacking::<Scalar>(&ctx_inject_bits);
-        // assert!(ctx_inject_packed.len() == 7);
-        // assert!(
-        //     ctx_inject_packed.len() == 26,
-        //     "Expected 26 packed scalars, got {}",
-        //     ctx_inject_packed.len()
-        // );
-        // dynamic length check: 7 for the Stark field, 26 for Goldilocks (CAPACITY=63).
-        let expected_inject_packed =
-            (1600 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
-        assert_eq!(
-            ctx_inject_packed.len(),
-            expected_inject_packed,
-            "ctx_inject should pack to {expected_inject_packed} scalars for this field, got {}",
-            ctx_inject_packed.len()
-        );
+        assert!(ctx_inject_packed.len() == 7);
         let inject_hasher = PoseidonHasher::<Scalar>::new(ctx_inject_packed.len() as u32);
 
         let mut ctx_squeeze: [bool; 1600] = ctx_inject.clone();
@@ -302,8 +265,7 @@ where
             dob_byte_index: aadhaar_qr_data.dob_byte_index,
             l2_norm_sum: l2_norm_sum,
             ctx_absorb: ctx_absorb.clone(),
-            // ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
-            ctx_inject_packed: ctx_inject_packed.clone(),
+            ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
             s2: s2.clone(),
             prev_nullifier: prev_nullifier,
             h: pk.clone(),
@@ -450,8 +412,7 @@ where
                 dob_byte_index: aadhaar_qr_data.dob_byte_index,
                 l2_norm_sum: l2_norm_sum,
                 ctx_absorb: ctx_absorb.clone(),
-                // ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
-                ctx_inject_packed: ctx_inject_packed.clone(),
+                ctx_inject_packed: ctx_inject_packed.clone().try_into().unwrap(),
                 s2: s2.clone(),
                 prev_nullifier: prev_nullifier,
                 h: pk.clone(),
@@ -497,17 +458,10 @@ where
 
 impl<Scalar> StepCircuit<Scalar> for AadhaarAgeProofCircuit<Scalar>
 where
-    // Scalar: PrimeFieldBits + PartialOrd,
-    Scalar: PrimeFieldBits + PartialOrd + IvcHash,
+    Scalar: PrimeFieldBits + PartialOrd,
 {
     fn arity(&self) -> usize {
-        // 2
-        // opcode + payload. The payload carries the single-element io_hash on most steps and
-        // the packed current date on step 0; the date needs the most slots (2 over Goldilocks,
-        // CAPACITY=63 < 80 date bits; it was 1 over the 252-bit Stark field).
-        let date_slots =
-            (DATE_LENGTH_BYTES * 8 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
-        1 + date_slots
+        2
     }
 
     fn synthesize<CS: ConstraintSystem<Scalar>>(
@@ -1244,19 +1198,8 @@ where
             &flag_first_step,
         )?;
 
-        // let mut current_date_bits = z[1].to_bits_le(cs.namespace(|| "alloc current date bits"))?;
-        // current_date_bits.truncate(DATE_LENGTH_BYTES * 8);
-        // Goldilocks: the 80-bit date spans z[1] (low CAPACITY bits) and z[2..] (the remainder).
-        let cap = Scalar::CAPACITY as usize;
-        let date_slots = (DATE_LENGTH_BYTES * 8 + cap - 1) / cap;
-        let mut current_date_bits: Vec<Boolean> = Vec::with_capacity(DATE_LENGTH_BYTES * 8);
-        for s in 0..date_slots {
-            let mut slot_bits =
-                z[1 + s].to_bits_le(cs.namespace(|| format!("current date slot {s} bits")))?;
-            let remaining = DATE_LENGTH_BYTES * 8 - s * cap;
-            slot_bits.truncate(remaining.min(cap));
-            current_date_bits.extend(slot_bits);
-        }
+        let mut current_date_bits = z[1].to_bits_le(cs.namespace(|| "alloc current date bits"))?;
+        current_date_bits.truncate(DATE_LENGTH_BYTES * 8);
 
         let (current_day, current_month, current_year) = get_day_month_year_conditional(
             cs.namespace(|| "get current birth day, month, year"),
@@ -1294,26 +1237,12 @@ where
             &flag_coeff.not(),
         )?;
 
-        // z_out grows to arity() elements: [opcode, payload0, payload1..]. payload0 carries
-        // io_hash/nullifier; the extra payload slots (the date's upper slots) are zero after step 0.
-        let n_pad = self.arity() - 2; // extra payload slots beyond [opcode, payload0]
-        let zero_pad = alloc_constant(cs.namespace(|| "z_out zero pad"), Scalar::ZERO)?;
-
-        // let last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
-        let mut last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
-        for _ in 0..n_pad {
-            last_z_out.push(zero_pad.clone());
-        }
-        let mut norm_z_out = vec![next_opcode.clone(), next_io_hash.clone()];
-        for _ in 0..n_pad {
-            norm_z_out.push(zero_pad.clone());
-        }
+        let last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
 
         let z_out = conditionally_select_vec(
             cs.namespace(|| "Choose between outputs of last opcode and others"),
             &last_z_out,
-            // &vec![next_opcode.clone(), next_io_hash.clone()],
-            &norm_z_out,
+            &vec![next_opcode.clone(), next_io_hash.clone()],
             &flag_last_step,
         )?;
 
