@@ -345,7 +345,7 @@ impl LatticefoldR1CS {
     }
 }
 
-// convert constraints in ShapeCS to latticefold::arith::r1cs::R1CS with z ordered as (x || 1 || w).
+/// Convert constraints in ShapeCS to latticefold::arith::r1cs::R1CS with z ordered as (x || 1 || w).
 pub fn build_r1cs(cs: &ShapeCS) -> LatticefoldR1CS {
     let x_len = cs.num_inputs() - 1;
     let ncols = x_len + 1 + cs.num_aux();
