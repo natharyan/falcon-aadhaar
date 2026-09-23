@@ -179,6 +179,7 @@ fn main() {
         pack_timer.elapsed()
     );
 
+    // Checks for consistency of GoldilocksFq and GoldilocksRingNTT R1CS instance(s)
     verify_both_sides(&extracted, (&a_f, &b_f, &c_f), &z_lanes);
     negative_control(&extracted, (&a_f, &b_f, &c_f), &z_lanes, 3);
     extracted

@@ -1,11 +1,10 @@
 use crate::{
     age_proof::latticefold::{AadhaarAgeProofCircuit, StepCircuit},
     latticefold_adapter::{
-        // stark_field::StarkFq,
         goldilocks_field::GoldilocksFq,
-        // ntt_pack::{check_field_relation, pack_z},
         ntt_pack::{check_field_relation, pack_z_batched},
         shape_cs::{z_vector, BpMatrix, LatticefoldR1CS, ShapeCS},
+        witness_cs::WitnessCS,
     },
 };
 use bellpepper_core::num::AllocatedNum;
@@ -37,33 +36,36 @@ pub fn synthesize_step(
     index: usize,
     shape_cs: &ShapeCS,
 ) -> (Vec<GoldilocksFq>, Vec<GoldilocksFq>) {
-    let mut cs = TestConstraintSystem::<GoldilocksFq>::new();
+    let mut cs = WitnessCS::<GoldilocksFq>::new();
     let z_alloc = alloc_public_z(&mut cs, z_in);
 
     let z_next_alloc = step
         .synthesize(&mut cs, &z_alloc)
         .expect("witness synthesis failed");
 
-    if !cs.is_satisfied() {
-        panic!(
-            "Step {} FAILED: {}",
-            index,
-            cs.which_is_unsatisfied().unwrap_or("<unknown>")
-        );
-    }
+    // Since satisfaction of post inverse NTT R1CS instance is equivalent to satisfaction of all pre NTT R1CS instances, we can skip this for GoldilocksFq.
 
-    if index == 0 {
-        match shape_cs.delta(&cs, false) {
-            Delta::Equal => println!("ShapeCS == TestConstraintSystem (Delta::Equal)"),
-            Delta::ConstraintMismatch(row, a, b) => panic!(
-                "shape/witness passes diverge at row {}:\n  ShapeCS: {:?}\n  TestCS:  {:?}",
-                row, a.3, b.3
-            ),
-            other => panic!("shape/witness passes diverge: {:?}", other),
-        }
-    }
+    // if !cs.is_satisfied() {
+    //     panic!(
+    //         "Step {} FAILED: {}",
+    //         index,
+    //         cs.which_is_unsatisfied().unwrap_or("<unknown>")
+    //     );
+    // }
 
-    let z = z_vector(&cs.scalar_inputs(), &cs.scalar_aux());
+    // if index == 0 {
+    //     match shape_cs.delta(&cs, false) {
+    //         Delta::Equal => println!("ShapeCS == TestConstraintSystem (Delta::Equal)"),
+    //         Delta::ConstraintMismatch(row, a, b) => panic!(
+    //             "shape/witness passes diverge at row {}:\n  ShapeCS: {:?}\n  TestCS:  {:?}",
+    //             row, a.3, b.3
+    //         ),
+    //         other => panic!("shape/witness passes diverge: {:?}", other),
+    //     }
+    // }
+
+    // let z = z_vector(&cs.scalar_inputs(), &cs.scalar_aux());
+    let z = z_vector(cs.input_assignment(), cs.aux_assignment());
     let z_out = z_next_alloc
         .iter()
         .map(|v| v.get_value().expect("z_out value missing"))
