@@ -1,5 +1,4 @@
-// Bellpepper implementation of https://github.com/natharyan/arkworks-keccak/blob/main/src/constraints.rs for shake256
-
+// A bellpepper implementation of https://github.com/natharyan/arkworks-keccak/ for shake256 (circuit computed using Arkworks)
 use crate::gadgets::bellpepper_uint64::UInt64;
 use crate::utils::{arr_u64_to_vec_bool, bits_to_bytes_le, bytes_to_bits_le, vec_bool_to_arr_u64};
 use bellpepper::gadgets::multipack::bytes_to_bits;

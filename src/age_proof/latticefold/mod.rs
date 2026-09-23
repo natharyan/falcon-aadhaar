@@ -176,8 +176,9 @@ where
         msg: &Vec<u8>,
         sig: &Signature,
     ) -> Vec<Scalar> {
-        let initial_opcode =
-            Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
+        // let initial_opcode = Scalar::from((OP_SHAKE256_ACTIVE << NUM_COEFF_INDEX_BITS) + OP_COEFF_INDEX_FIRST);
+
+        let initial_cntr = Scalar::ZERO;
 
         assert!(
             msg.len() >= NONCE_LENGTH_BYTES,
@@ -214,7 +215,7 @@ where
         //     // ctx_inject_packed[0],
         //     current_date_scalar,
         // ]
-        let mut z0 = vec![initial_opcode];
+        let mut z0 = vec![initial_cntr];
         z0.extend(current_date_scalars); // [opcode, date_0, .. date_{date_slots-1}]
         z0
     }
@@ -317,7 +318,8 @@ where
         prev_nullifier = Self::update_nullifier(prev_nullifier, &msg_blocks[0], true);
 
         // let num_steps = max(num_blocks, 8);
-        let num_steps = max(num_blocks, 9); // 9 steps to sample c_coeff 612 times
+        // let num_steps = max(num_blocks, 9); // 9 steps to sample c_coeff 612 times
+        let num_steps = 16; // decided based on max emperical length of Aadhaar QR codes and # Goldilocks NTT components = 8.
         println!("Number of steps: {}", num_steps);
 
         // compute s2*h modulo q
@@ -501,10 +503,7 @@ where
     Scalar: PrimeFieldBits + PartialOrd + IvcHash,
 {
     fn arity(&self) -> usize {
-        // 2
-        // opcode + payload. The payload carries the single-element io_hash on most steps and
-        // the packed current date on step 0; the date needs the most slots (2 over Goldilocks,
-        // CAPACITY=63 < 80 date bits; it was 1 over the 252-bit Stark field).
+        // multiple field elements required for date, as Goldilocks::CAPACITY = 63 and date field has 80 bits.
         let date_slots =
             (DATE_LENGTH_BYTES * 8 + Scalar::CAPACITY as usize - 1) / Scalar::CAPACITY as usize;
         1 + date_slots
@@ -515,8 +514,13 @@ where
         cs: &mut CS,
         z: &[AllocatedNum<Scalar>],
     ) -> Result<Vec<AllocatedNum<Scalar>>, SynthesisError> {
-        let opcode = &z[0];
+        // let opcode = &z[0];
+        let cntr = &z[0];
         let io_hash = &z[1];
+
+        let opcode = AllocatedNum::alloc(cs.namespace(|| "opcode_i (auxiliary)"), || {
+            Ok(Scalar::from(self.opcode))
+        })?;
 
         let s2_vars = self
             .s2
@@ -591,7 +595,8 @@ where
         let mut ctx_squeeze_vars: Vec<Boolean> = vec![];
 
         // enforce consistency of ctx_inject, l2_norm_sum, ctx_absorb
-        let mut io_hash_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
+        let mut io_hash_preimage: Vec<AllocatedNum<Scalar>> = vec![opcode.clone()];
+        io_hash_preimage.extend(ctx_inject_packed_vars.to_vec().clone());
         io_hash_preimage.push(l2_norm_sum_var.clone());
         for (i, &b) in self.ctx_absorb.iter().enumerate() {
             let ctx_absorb_bit = Boolean::from(AllocatedBit::alloc(
@@ -645,8 +650,11 @@ where
             .collect::<Result<Vec<Boolean>, SynthesisError>>()?;
 
         // range check on opcode and next_opcode for 10 bits
-        let opcode_bits_le =
-            num_to_bits(cs.namespace(|| "Decompose opcode"), opcode, NUM_OPCODE_BITS)?;
+        let opcode_bits_le = num_to_bits(
+            cs.namespace(|| "Decompose opcode"),
+            &opcode,
+            NUM_OPCODE_BITS,
+        )?;
         let current_shake_opcode = opcode_bits_le[NUM_COEFF_INDEX_BITS as usize].clone();
         let current_coeff_index_bits_le = opcode_bits_le[..NUM_COEFF_INDEX_BITS as usize].to_vec();
         let next_opcode_bits_le = num_to_bits(
@@ -1185,7 +1193,8 @@ where
             &flag_shake_active,
         )?;
 
-        let mut next_io_hash_preimage: Vec<AllocatedNum<Scalar>> = ctx_inject_packed_vars.to_vec();
+        let mut next_io_hash_preimage: Vec<AllocatedNum<Scalar>> = vec![next_opcode.clone()];
+        next_io_hash_preimage.extend(ctx_inject_packed_vars.to_vec().clone());
         next_io_hash_preimage.push(l2_norm_sum_var);
         next_io_hash_preimage.extend(ctx_absorb_packed_vars);
         next_io_hash_preimage.extend(ctx_squeeze_packed_vars);
@@ -1287,11 +1296,21 @@ where
             &age_gte_18,
         )?;
 
+        let one = alloc_constant(cs.namespace(|| "cntr one"), Scalar::ONE)?;
+        let next_cntr = cntr.add(cs.namespace(|| "cntr + 1"), &one)?;
+
         // once all message blocks have been absorbed and all coefficients have been processed
-        let flag_last_step = Boolean::and(
-            cs.namespace(|| "final step flag"),
-            &next_shake_opcode,
-            &flag_coeff.not(),
+        // let flag_last_step = Boolean::and(
+        //     cs.namespace(|| "final step flag"),
+        //     &next_shake_opcode,
+        //     &flag_coeff.not(),
+        // )?;
+
+        let sixteen = alloc_constant(cs.namespace(|| "sixteen"), Scalar::from(16u64))?;
+        let flag_last_step = alloc_num_equals(
+            cs.namespace(|| "final step flag (cntr == 16)"),
+            &next_cntr,
+            &sixteen,
         )?;
 
         // z_out grows to arity() elements: [opcode, payload0, payload1..]. payload0 carries
@@ -1300,20 +1319,22 @@ where
         let zero_pad = alloc_constant(cs.namespace(|| "z_out zero pad"), Scalar::ZERO)?;
 
         // let last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
-        let mut last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
+        // let mut last_z_out = vec![next_opcode.clone(), next_nullifier.clone()];
+        let mut last_z_out = vec![next_cntr.clone(), next_nullifier.clone()];
         for _ in 0..n_pad {
             last_z_out.push(zero_pad.clone());
         }
-        let mut norm_z_out = vec![next_opcode.clone(), next_io_hash.clone()];
+        // let mut intmd_z_out = vec![next_opcode.clone(), next_io_hash.clone()];
+        let mut intmd_z_out = vec![next_cntr.clone(), next_io_hash.clone()];
         for _ in 0..n_pad {
-            norm_z_out.push(zero_pad.clone());
+            intmd_z_out.push(zero_pad.clone());
         }
 
         let z_out = conditionally_select_vec(
             cs.namespace(|| "Choose between outputs of last opcode and others"),
             &last_z_out,
             // &vec![next_opcode.clone(), next_io_hash.clone()],
-            &norm_z_out,
+            &intmd_z_out,
             &flag_last_step,
         )?;
 

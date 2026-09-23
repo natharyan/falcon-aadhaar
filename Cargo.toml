@@ -49,13 +49,13 @@ falcon-1024 = [ "falcon-rust/falcon-1024" ]
 parallel = [ ]
 
 [[example]]
-name = "nova_age_proof"
-path = "examples/nova/age_proof.rs"
-
-[[example]]
 name = "latticefold_age_proof"
 path = "examples/latticefold/age_proof.rs"
 
 [[example]]
 name = "latticefold_age_proof_stark"
 path = "examples/latticefold/age_proof_starkfield.rs"
+
+[[example]]
+name = "nova_proof_possession_aggregated"
+path = "examples/nova/proof_possession_aggregated.rs"
