@@ -158,8 +158,8 @@ fn main() {
     );
 
     // let n_pad = pad_lanes(&mut z_lanes, k);
-    let n_pad = pad_lanes(&mut z_lanes, target_lanes);
-    println!("Padded {n_pad} lanes by replicating the final step's witness");
+    // let n_pad = pad_lanes(&mut z_lanes, target_lanes);
+    // println!("Padded {n_pad} lanes by replicating the final step's witness");
 
     let build_timer = Instant::now();
     let extracted = build_r1cs(&shape_cs);
@@ -198,7 +198,7 @@ fn main() {
 
     println!("Multi-step packing works.");
     println!("real steps       : {num_steps}");
-    println!("padded lanes     : {n_pad}");
+    // println!("padded lanes     : {n_pad}");
     println!("NTT slots        : {k}");
     println!("packed instances : {num_batches}"); // new
     println!("constraints      : {}", extracted.r1cs.A.nrows);

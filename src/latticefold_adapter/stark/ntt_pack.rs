@@ -1,5 +1,5 @@
-//! packing k R1CS instances over StarkFq into one R1CS instance over StarkRingNTT.
-//! Remark 4.1 of the LatticeFold paper for a uniform IVC (matrices A,B,C are the same for each step).
+//! packing k R1CS instances over StarkFq into one R1CS instance over StarkRingNTT (Remark 4.1 of the LatticeFold paper)
+//! for a uniform IVC (matrices A,B,C are the same for each step).
 
 use std::collections::BTreeMap;
 
