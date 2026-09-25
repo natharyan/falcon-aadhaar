@@ -1,4 +1,5 @@
 pub mod goldilocks_field;
+pub mod lf_prove;
 pub mod ntt_pack;
 pub mod shape_cs;
 pub mod stark;

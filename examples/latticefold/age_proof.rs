@@ -20,6 +20,8 @@ use falcon_aadhaar::latticefold_adapter::{
     // shape_cs::{z_vector, BpMatrix},
 };
 
+use falcon_aadhaar::latticefold_adapter::lf_prove::{fold_two, verify_folded};
+
 use falcon_rust::{Polynomial, PublicKey};
 use image::{self};
 use num_bigint::BigInt;
@@ -193,16 +195,76 @@ fn main() {
             .unwrap_or_else(|e| panic!("packed R1CS batch {b} check_relation failed: {e}"));
     }
 
-    println!("Successfull: Generated all z vectors for R1CS instances over GoldilocksFq and GoldilocksRingNTT!");
-    println!("Successfull: All R1CS constraints over GoldilocksRingNTT as well as GoldilocksFq are satisfied!");
+    // println!("Successfull: Generated all z vectors for R1CS instances over GoldilocksFq and GoldilocksRingNTT!");
+    // println!("Successfull: All R1CS constraints over GoldilocksRingNTT as well as GoldilocksFq are satisfied!");
 
-    println!("real steps       : {num_steps}");
-    // println!("padded lanes     : {n_pad}");
-    println!("NTT slots        : {k}");
-    println!("packed instances : {num_batches}"); // new
-    println!("constraints      : {}", extracted.r1cs.A.nrows);
-    println!("|z| per lane     : {ncols}");
-    // println!("|z*| (ring)      : {}", z_star.len());
-    println!("|z*| (ring)      : {ncols} per instance");
-    println!("public inputs (l): {}", extracted.r1cs.l);
+    // println!("real steps       : {num_steps}");
+    // // println!("padded lanes     : {n_pad}");
+    // println!("NTT slots        : {k}");
+    // println!("packed instances : {num_batches}"); // new
+    // println!("constraints      : {}", extracted.r1cs.A.nrows);
+    // println!("|z| per lane     : {ncols}");
+    // // println!("|z*| (ring)      : {}", z_star.len());
+    // println!("|z*| (ring)      : {ncols} per instance");
+    // println!("public inputs (l): {}", extracted.r1cs.l);
+
+    println!("Number of R1CS instances over GoldilocksFq (lanes): {target_lanes}");
+    println!(
+        "Number of R1CS instances over GoldilocksRingNTT (packed): {}",
+        z_stars.len()
+    );
+    println!(
+        "check_relation over GoldilocksRingNTT: OK for all {} packed instance(s)",
+        z_stars.len()
+    );
+    println!("  => all {target_lanes} field R1CS instances satisfied (NTT is a ring isomorphism)");
+
+    // Goldilocks packs 8 lanes per instance, so 16 lanes give 2 instances that must be
+    // folded once into a single proof. exactly one fold; no accumulator loop.
+    assert_eq!(
+        z_stars.len(),
+        2,
+        "expected exactly 2 packed instances to fold; got {}",
+        z_stars.len()
+    );
+
+    // fold the two GoldilocksRingNTT instances into one accumulated instance + proof.
+    println!(
+        "Folding the {} GoldilocksRingNTT instances into one...",
+        z_stars.len()
+    );
+
+    let num_constraints = extracted.r1cs.A.nrows;
+    let num_pub_io = extracted.r1cs.l;
+
+    let folded = fold_two(extracted, &z_stars[0], &z_stars[1]).expect("fold_two failed");
+    println!(
+        "RecursiveSNARK::prove (fold): OK, took {:?}",
+        folded.prove_time
+    );
+
+    let verify_time = verify_folded(&folded).expect("folding verification failed");
+    println!("RecursiveSNARK::verify (fold): OK, took {verify_time:?}");
+
+    let (compressed, uncompressed) = folded.proof_sizes().expect("serialize proof");
+
+    println!("=========================================================");
+    println!("Number of constraints per instance: {}", num_constraints);
+    println!("Total real steps folded:            {num_steps}");
+    println!("NTT slots per instance:             {k}");
+    println!("Packed instances (folded):          {}", z_stars.len());
+    println!("|z*| (ring elements per instance):  {ncols}");
+    println!("Public inputs (l):                  {}", num_pub_io);
+    println!(
+        "Folding proof size:                 {:.1} KB",
+        compressed as f64 / 1000.0
+    );
+    println!("Folding proof size (uncompressed):  {uncompressed} bytes");
+    println!(
+        "Total proving time (fold):          {:?}",
+        folded.prove_time
+    );
+    println!("Total verification time (fold):     {verify_time:?}");
+    println!("=========================================================");
+    println!("Successful: packed, checked, folded and verified.");
 }

@@ -3,6 +3,10 @@ name = "falcon-aadhaar"
 version = "0.1.0"
 edition = "2021"
 
+[patch."https://github.com/nethermindeth/latticefold"]
+latticefold      = { path = "dependencies/latticefold/crates/latticefold" }
+cyclotomic-rings = { path = "dependencies/latticefold/crates/cyclotomic-rings" }
+
 [dependencies]
 falcon-rust = { git = "https://github.com/zhenfeizhang/falcon.rs", package = "falcon-rust", default-features = false }
 nova-aadhaar-qr = { git = "https://github.com/avras/nova-aadhaar-qr" }
@@ -39,8 +43,10 @@ rand = "0.10.0"
 serde_json = "1.0.149"
 qrcode = "0.14.1"
 ark-ff = { version = "0.4", default-features = false }
+ark-serialize = "0.4.2"
 # plonky2 = { git = "https://github.com/0xPolygonZero/plonky2", rev = "5d9da5a65bbcba2c66eb29c035090eb2e9ccb05f", default-features = false, features = ["std"] }
 qp-plonky2-core = { version = "1.5.6", default-features = false, features = ["std"] }
+ark-std = "0.4.0"
 
 [features]
 default = [ "falcon-512", "parallel" ]
